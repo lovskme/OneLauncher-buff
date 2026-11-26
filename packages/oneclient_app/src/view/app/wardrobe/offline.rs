@@ -2,7 +2,7 @@ use freya::prelude::*;
 use oneclient_core::offline_appearance::{self as local, Appearance};
 use uuid::Uuid;
 
-use crate::components::{Button, PlayerModel, TextInput};
+use crate::components::{Button, PlayerModel, ScrollArea, TextInput};
 use crate::i18n::t;
 use crate::theme::{colors, text_size};
 
@@ -57,7 +57,7 @@ impl Component for OfflineWardrobe {
     fn render(&self) -> impl IntoElement {
         let account = self.account;
         let mut appearance = use_state(Appearance::default);
-        let busy = use_state(|| false);
+        let mut busy = use_state(|| true);
         let mut status = use_state(String::new);
         let name = use_state(String::new);
         use_hook(move || {
@@ -66,12 +66,13 @@ impl Component for OfflineWardrobe {
                     Ok(value) => appearance.set(value),
                     Err(err) => status.set(err),
                 }
+                busy.set(false);
             });
         });
         let current = appearance.read().clone();
         let enabled = !*busy.read();
         let valid_name = oneclient_auth::validate_offline_username(name.read().trim()).is_ok();
-        rect().vertical().width(Size::fill()).height(Size::fill()).padding(Gaps::new_all(24.)).spacing(16.)
+        let content = rect().vertical().width(Size::fill()).padding(Gaps::new_all(24.)).spacing(16.)
             .child(label().text(t("oneclient.wardrobe.local.title")).font_size(text_size(24.)).color(colors::fg_primary()))
             .child(label().text(t("oneclient.wardrobe.local.hint")).font_size(text_size(13.)).color(colors::fg_secondary()))
             .child(PlayerModel::new(account.to_string())
@@ -95,7 +96,8 @@ impl Component for OfflineWardrobe {
                 .child(Button::new().ghost().enabled(enabled).text(t("oneclient.wardrobe.local.clear_cape"))
                     .on_press(move |_| run(account, Action::Remove(true), appearance, busy, status))))
             .child(label().text(status.read().clone()).font_size(text_size(13.)).color(colors::fg_secondary()))
-            .into_element()
+            .into_element();
+        ScrollArea::new().width(Size::fill()).height(Size::fill()).child(content)
     }
 
     fn render_key(&self) -> DiffKey { DiffKey::U64(self.key_hash()) }

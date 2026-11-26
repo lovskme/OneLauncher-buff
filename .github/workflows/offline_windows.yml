@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: offline-windows-${{ github.ref }}
+  group: offline-wardrobe-${{ github.ref }}
   cancel-in-progress: true
 
 env:

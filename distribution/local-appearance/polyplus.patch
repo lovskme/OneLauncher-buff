@@ -38,10 +38,10 @@ index f544e4e..8ee9a52 100644
          return textureId.startsWith(DEFAULT_SKIN_PREFIX) || textureId in current.replaceablePaths
 diff --git a/src/main/kotlin/org/polyfrost/polyplus/client/cosmetics/OfflineAppearance.kt b/src/main/kotlin/org/polyfrost/polyplus/client/cosmetics/OfflineAppearance.kt
 new file mode 100644
-index 0000000..89919dd
+index 0000000..029d172
 --- /dev/null
 +++ b/src/main/kotlin/org/polyfrost/polyplus/client/cosmetics/OfflineAppearance.kt
-@@ -0,0 +1,133 @@
+@@ -0,0 +1,143 @@
 +package org.polyfrost.polyplus.client.cosmetics
 +
 +import kotlinx.coroutines.Dispatchers
@@ -152,6 +152,16 @@ index 0000000..89919dd
 +
 +    fun importFile(file: Path, cape: Boolean, slim: Boolean) = save(read(file), cape, slim)
 +
++    fun slimModel(): Boolean = root?.resolve("model.txt")?.let { file ->
++        Files.isRegularFile(file) && Files.readString(file).trim() == "slim"
++    } ?: false
++
++    fun setSlim(slim: Boolean) {
++        check(enabled)
++        write(root!!.resolve("model.txt"), (if (slim) "slim" else "classic").toByteArray())
++        stamp = null
++    }
++
 +    fun save(bytes: ByteArray, cape: Boolean, slim: Boolean) {
 +        check(enabled) { "Select an offline profile to use the local wardrobe." }
 +        decode(bytes, cape)
@@ -227,16 +237,32 @@ index f0a232b..d74c693 100644
      var consent by rememberOnlineConsent()
      WardrobeContent(consent, onBack, onMarketplace) { consent = true }
  }
+diff --git a/src/main/kotlin/org/polyfrost/polyplus/client/gui/preview/PlayerPreviewRenderer.kt b/src/main/kotlin/org/polyfrost/polyplus/client/gui/preview/PlayerPreviewRenderer.kt
+index d1ce0a6..5f586ef 100644
+--- a/src/main/kotlin/org/polyfrost/polyplus/client/gui/preview/PlayerPreviewRenderer.kt
++++ b/src/main/kotlin/org/polyfrost/polyplus/client/gui/preview/PlayerPreviewRenderer.kt
+@@ -1786,7 +1786,8 @@ object PlayerPreviewRenderer {
+             if (source.equipment.get(BodySlot.Backpack) != null) null
+             else source.capeCosmeticId?.let(CosmeticAssetCache::getCapeResource) ?: source.mojangCape
+         PlayerPreviewSource.LocalLive ->
+-            CosmeticCatalog.localEquipped().cape?.let(CosmeticAssetCache::getCapeResource)
++            org.polyfrost.polyplus.client.cosmetics.OfflineAppearance.cape(ClientPlatform.localPlayerUuid())
++                ?: CosmeticCatalog.localEquipped().cape?.let(CosmeticAssetCache::getCapeResource)
+                 ?: if (!MojangCapeService.overridesLocalCape(ClientPlatform.localPlayerUuid())) playerCape(mc)
+                 else MojangCapeService.localCapeTexture()
+                     ?: if (MojangCapeService.localCapeHidden()) null else playerCape(mc)
 diff --git a/src/main/kotlin/org/polyfrost/polyplus/client/gui/wardrobe/OfflineAppearancePanel.kt b/src/main/kotlin/org/polyfrost/polyplus/client/gui/wardrobe/OfflineAppearancePanel.kt
 new file mode 100644
-index 0000000..fbdf7a8
+index 0000000..0607f7b
 --- /dev/null
 +++ b/src/main/kotlin/org/polyfrost/polyplus/client/gui/wardrobe/OfflineAppearancePanel.kt
-@@ -0,0 +1,71 @@
+@@ -0,0 +1,81 @@
 +@file:OptIn(org.polyfrost.oneconfig.api.ui.v1.ExperimentalOneConfigUiApi::class)
 +
 +package org.polyfrost.polyplus.client.gui.wardrobe
 +
++import androidx.compose.foundation.rememberScrollState
++import androidx.compose.foundation.verticalScroll
 +import androidx.compose.foundation.layout.Arrangement
 +import androidx.compose.foundation.layout.Column
 +import androidx.compose.foundation.layout.fillMaxSize
@@ -244,6 +270,7 @@ index 0000000..fbdf7a8
 +import androidx.compose.foundation.layout.height
 +import androidx.compose.foundation.layout.padding
 +import androidx.compose.runtime.Composable
++import androidx.compose.runtime.LaunchedEffect
 +import androidx.compose.runtime.getValue
 +import androidx.compose.runtime.mutableStateOf
 +import androidx.compose.runtime.remember
@@ -270,6 +297,7 @@ index 0000000..fbdf7a8
 +    var slim by remember { mutableStateOf(false) }
 +    var busy by remember { mutableStateOf(false) }
 +    var message by remember { mutableStateOf("Changes are local to this client. Name lookup needs internet.") }
++    LaunchedEffect(Unit) { slim = withContext(Dispatchers.IO) { runCatching { OfflineAppearance.slimModel() }.getOrDefault(false) } }
 +
 +    fun action(work: suspend () -> Unit) {
 +        if (busy) return
@@ -277,6 +305,7 @@ index 0000000..fbdf7a8
 +        scope.launch {
 +            message = try {
 +                withContext(Dispatchers.IO) { work() }
++                slim = withContext(Dispatchers.IO) { OfflineAppearance.slimModel() }
 +                "Appearance saved. It applies in-game automatically."
 +            } catch (error: Exception) { error.message ?: "Could not update appearance." }
 +            finally { busy = false }
@@ -290,12 +319,17 @@ index 0000000..fbdf7a8
 +        OfflineAppearance.importFile(file, cape, slim)
 +    }
 +
-+    Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
++    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
 +        onBack?.let { TextButton("Back", { it() }) }
 +        Text("Local wardrobe")
 +        PlayerPreview(Modifier.fillMaxWidth().height(200.dp), source = PlayerPreviewSource.LocalLive, autoSpin = false, live = true)
 +        TextButton("Import skin PNG", { choose(false) })
-+        TextButton(if (slim) "Model: slim (click to change)" else "Model: classic (click to change)", { slim = !slim })
++        TextButton(if (slim) "Model: slim (click to change)" else "Model: classic (click to change)", {
++            if (!busy) {
++                val next = !slim
++                action { OfflineAppearance.setSlim(next) }
++            }
++        })
 +        TextButton("Import cape PNG (64 x 32)", { choose(true) })
 +        TextField(value = name, onValueChange = { name = it }, placeholder = "Minecraft username", modifier = Modifier.fillMaxWidth())
 +        TextButton("Use skin by username", { action { OfflineAppearance.fromUsername(name) } })
