@@ -100,7 +100,8 @@ mod tests {
         for _ in 0..4 {
             test.sync_and_update();
         }
-        assert!(renders.get() > 0 && renders.get() <= 4);
+        assert!(renders.get() > 0 && renders.get() <= 4,
+            "same skin requested unbounded renders: {} redraws", renders.get());
     }
 
     fn changing_skin() -> impl IntoElement {

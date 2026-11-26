@@ -117,12 +117,14 @@ jobs:
             $output = & cargo test --locked --release -p oneclient_avatar_cache_tests --lib fresh_png_allocations_settle_without_repainting_forever -- --nocapture 2>&1
             $result = $LASTEXITCODE
             $output | Write-Output
-            if ($result -eq 0 -or ($output -join "`n") -notmatch 'same skin requested unbounded renders') {
+            if ($result -eq 0 -or ($output -join "`n") -notmatch 'same skin requested unbounded renders' -or ($output -join "`n") -notmatch 'test result:.*FAILED') {
               throw 'The previous redraw loop was not reproduced by the regression test.'
             }
           } finally {
             [IO.File]::WriteAllText($path, $source, [Text.UTF8Encoding]::new($false))
           }
+          git diff --exit-code -- $path
+          if ($LASTEXITCODE -ne 0) { throw 'Production avatar source was not restored.' }
           cargo test --locked --release -p oneclient_avatar_cache_tests --lib
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 

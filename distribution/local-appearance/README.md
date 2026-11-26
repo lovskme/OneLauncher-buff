@@ -51,3 +51,10 @@ cache module directly. Its renderer tests check bounded redraws with fresh,
 identical PNG allocations and verify that changing a skin changes avatar pixels.
 CI also temporarily reinstates the old pointer comparison, requires that the
 redraw test fails with that fault, restores the source and reruns the fixed tests.
+
+World rendering binds local PNGs to the active player entity by object identity.
+The session UUID continues to select the local profile directory; a UUID supplied
+by a multiplayer server does not change the selected local skin/cape. Other world
+entities keep their original texture resolution. Tests cover server UUID changes,
+a different entity with a matching UUID and the absence of a live player.
+The game logs one binding entry per profile/entity UUID pair for diagnostics.

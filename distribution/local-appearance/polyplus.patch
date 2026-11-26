@@ -1,8 +1,16 @@
 diff --git a/src/main/java/org/polyfrost/polyplus/mixin/client/cosmetics/MixinAbstractClientPlayer.java b/src/main/java/org/polyfrost/polyplus/mixin/client/cosmetics/MixinAbstractClientPlayer.java
-index 5b41160..ad69a74 100644
+index 5b41160..7c71944 100644
 --- a/src/main/java/org/polyfrost/polyplus/mixin/client/cosmetics/MixinAbstractClientPlayer.java
 +++ b/src/main/java/org/polyfrost/polyplus/mixin/client/cosmetics/MixinAbstractClientPlayer.java
-@@ -96,6 +96,7 @@ import org.polyfrost.polyplus.client.cosmetics.CosmeticEquipment;
+@@ -84,6 +84,7 @@ public abstract class MixinAbstractClientPlayer implements PlayerEmotesAccess, P
+ //?} else {
+ /*import com.llamalad7.mixinextras.injector.ModifyReturnValue;
+ import com.mojang.authlib.GameProfile;
++import net.minecraft.client.Minecraft;
+ import net.minecraft.client.entity.living.player.ClientPlayerEntity;
+ import net.minecraft.client.network.PlayerInfo;
+ import net.minecraft.entity.living.player.PlayerEntity;
+@@ -96,6 +97,7 @@ import org.polyfrost.polyplus.client.cosmetics.CosmeticEquipment;
  import org.polyfrost.polyplus.client.cosmetics.LocalSkinOverride;
  import org.polyfrost.polyplus.client.cosmetics.MojangCapeService;
  import org.polyfrost.polyplus.client.cosmetics.MojangSkinService;
@@ -10,15 +18,39 @@ index 5b41160..ad69a74 100644
  import org.polyfrost.polyplus.client.cosmetics.access.PlayerCosmeticsAccess;
  import org.polyfrost.polyplus.client.cosmetics.access.PlayerEmotesAccess;
  import org.polyfrost.polyplus.client.emotes.playback.EmoteController;
-@@ -153,6 +154,8 @@ public abstract class MixinAbstractClientPlayer extends PlayerEntity implements
+@@ -153,6 +155,9 @@ public abstract class MixinAbstractClientPlayer extends PlayerEntity implements
      @ModifyReturnValue(method = "getCapeTextureLocation", at = @At("RETURN"))
      private Identifier polyplus$replaceCapeTexture(Identifier original) {
          UUID playerId = ((ClientPlayerEntity) (Object) this).getUuid();
-+        Identifier localCape = OfflineAppearance.cape(playerId);
++        Identifier localCape = OfflineAppearance.capeForLivePlayer(this, Minecraft.getInstance().player, playerId);
++        if (localCape == null) localCape = OfflineAppearance.cape(playerId);
 +        if (localCape != null) return localCape;
          switch (CapeResolver.decide(playerId, original == null ? null : original.getNamespace())) {
              case POLYPLUS:
                  return polyplus$orOriginal(CosmeticAssetCache.getCapeTexture(playerId), original);
+@@ -184,6 +189,8 @@ public abstract class MixinAbstractClientPlayer extends PlayerEntity implements
+     @Unique
+     private PreviewSkin polyplus$localSkin() {
+         UUID playerId = ((ClientPlayerEntity) (Object) this).getUuid();
++        PreviewSkin local = OfflineAppearance.skinForLivePlayer(this, Minecraft.getInstance().player, playerId);
++        if (local != null) return local;
+         PreviewSkin skin = LocalSkinOverride.forPlayer(playerId);
+         if (skin == null) return null;
+         PlayerInfo info = getInfo();
+diff --git a/src/main/kotlin/org/polyfrost/polyplus/client/cosmetics/LocalEntityAppearance.kt b/src/main/kotlin/org/polyfrost/polyplus/client/cosmetics/LocalEntityAppearance.kt
+new file mode 100644
+index 0000000..571dba4
+--- /dev/null
++++ b/src/main/kotlin/org/polyfrost/polyplus/client/cosmetics/LocalEntityAppearance.kt
+@@ -0,0 +1,8 @@
++package org.polyfrost.polyplus.client.cosmetics
++
++/** Servers can replace entity UUIDs. Local textures follow the actual live
++ * player object; another entity must never obtain them by copying its UUID. */
++internal object LocalEntityAppearance {
++    fun <T> resolve(entity: Any, livePlayer: Any?, readTexture: () -> T?): T? =
++        if (entity === livePlayer) readTexture() else null
++}
 diff --git a/src/main/kotlin/org/polyfrost/polyplus/client/cosmetics/LocalSkinOverride.kt b/src/main/kotlin/org/polyfrost/polyplus/client/cosmetics/LocalSkinOverride.kt
 index 32e0bd4..8f0a5f0 100644
 --- a/src/main/kotlin/org/polyfrost/polyplus/client/cosmetics/LocalSkinOverride.kt
@@ -46,10 +78,10 @@ index f544e4e..8ee9a52 100644
          return textureId.startsWith(DEFAULT_SKIN_PREFIX) || textureId in current.replaceablePaths
 diff --git a/src/main/kotlin/org/polyfrost/polyplus/client/cosmetics/OfflineAppearance.kt b/src/main/kotlin/org/polyfrost/polyplus/client/cosmetics/OfflineAppearance.kt
 new file mode 100644
-index 0000000..13d7522
+index 0000000..8a6e580
 --- /dev/null
 +++ b/src/main/kotlin/org/polyfrost/polyplus/client/cosmetics/OfflineAppearance.kt
-@@ -0,0 +1,153 @@
+@@ -0,0 +1,174 @@
 +package org.polyfrost.polyplus.client.cosmetics
 +
 +import kotlinx.coroutines.Dispatchers
@@ -95,6 +127,27 @@ index 0000000..13d7522
 +        poll()
 +        return look?.takeIf { enabled && it.owner == owner && owner == ClientPlatform.localPlayerUuid() }?.cape
 +    }
++
++    private var loggedBinding: Pair<UUID, UUID>? = null
++
++    private fun entityTextureOwner(entityId: UUID): UUID {
++        val sessionId = ClientPlatform.localPlayerUuid()
++        if (loggedBinding?.first != sessionId || loggedBinding?.second != entityId) {
++            loggedBinding = sessionId to entityId
++            logger.info("Local player appearance binding: profile={}, entity={}", sessionId, entityId)
++        }
++        return sessionId
++    }
++
++    @JvmStatic fun skinForLivePlayer(entity: Any, livePlayer: Any?, entityId: UUID): PreviewSkin? =
++        LocalEntityAppearance.resolve(entity, livePlayer) {
++            if (enabled) skin(entityTextureOwner(entityId)) else null
++        }
++
++    @JvmStatic fun capeForLivePlayer(entity: Any, livePlayer: Any?, entityId: UUID): Identifier? =
++        LocalEntityAppearance.resolve(entity, livePlayer) {
++            if (enabled) cape(entityTextureOwner(entityId)) else null
++        }
 +
 +    private fun poll() {
 +        if (!enabled || pending || System.currentTimeMillis() < nextPoll) return
@@ -231,7 +284,7 @@ index 0000000..a39a5dc
 +    }
 +}
 diff --git a/src/main/kotlin/org/polyfrost/polyplus/client/cosmetics/outfits/SkinLibrary.kt b/src/main/kotlin/org/polyfrost/polyplus/client/cosmetics/outfits/SkinLibrary.kt
-index f4f9358..4e8fba1 100644
+index f4f9358..31fc106 100644
 --- a/src/main/kotlin/org/polyfrost/polyplus/client/cosmetics/outfits/SkinLibrary.kt
 +++ b/src/main/kotlin/org/polyfrost/polyplus/client/cosmetics/outfits/SkinLibrary.kt
 @@ -23,6 +23,8 @@ import kotlinx.coroutines.launch
@@ -348,7 +401,18 @@ index f4f9358..4e8fba1 100644
          if (!OutfitApi.allowed()) return unavailable()
          return OutfitApi.send<Unit>(HttpMethod.Delete, "/skins/$id")
              .onSuccess {
-@@ -297,6 +332,7 @@ object SkinLibrary {
+@@ -275,7 +310,9 @@ object SkinLibrary {
+         return null
+     }
+ 
+-    fun failureMessage(error: Throwable): String = OutfitApi.failureMessage(
++    fun failureMessage(error: Throwable): String = if (OfflineAppearance.enabled) {
++        error.message ?: "Could not update local skins."
++    } else OutfitApi.failureMessage(
+         error,
+         notFound = "That skin no longer exists.",
+         conflict = "Your skin library is full ($limit skins). Delete one to make room.",
+@@ -297,6 +334,7 @@ object SkinLibrary {
      }
  
      internal fun recordInBackground(force: Boolean = false, background: Boolean = !force) {
@@ -356,7 +420,7 @@ index f4f9358..4e8fba1 100644
          if (!OutfitApi.allowed()) return
          val owner = runCatching { ClientPlatform.localPlayerUuid() }.getOrNull() ?: return
          if (!force && lastRecordOwner == owner && System.currentTimeMillis() - lastRecordAt < RECORD_INTERVAL_MS) return
-@@ -312,6 +348,7 @@ object SkinLibrary {
+@@ -312,6 +350,7 @@ object SkinLibrary {
      }
  
      private suspend fun recordShared(fresh: Boolean, background: Boolean): Result<PlayerSkinInfo?> {
@@ -364,7 +428,7 @@ index f4f9358..4e8fba1 100644
          if (!OutfitApi.allowed()) return OutfitApi.privacyFailure()
          val job = recordJobLock.withLock {
              val running = recordJob?.takeIf { it.isActive }
-@@ -450,6 +487,19 @@ object SkinLibrary {
+@@ -450,6 +489,19 @@ object SkinLibrary {
      }
  
      private suspend fun patch(id: Int, body: JsonObject): Result<PlayerSkinInfo> {
@@ -384,7 +448,7 @@ index f4f9358..4e8fba1 100644
          if (!OutfitApi.allowed()) return unavailable()
          return OutfitApi.send<SkinResponse>(HttpMethod.Patch, "/skins/$id", body)
              .map { it.toInfo() }
-@@ -576,7 +626,7 @@ object SkinLibrary {
+@@ -576,7 +628,7 @@ object SkinLibrary {
          *///?}
      }
  
@@ -393,7 +457,7 @@ index f4f9358..4e8fba1 100644
          if (source.height != 32) return source
          val image = BufferedImage(64, 64, BufferedImage.TYPE_INT_ARGB)
          val graphics = image.createGraphics()
-@@ -586,7 +636,7 @@ object SkinLibrary {
+@@ -586,7 +638,7 @@ object SkinLibrary {
          return image
      }
  
@@ -402,7 +466,7 @@ index f4f9358..4e8fba1 100644
          val image = BufferedImage(source.width, source.height, BufferedImage.TYPE_INT_ARGB)
          image.createGraphics().apply { drawImage(source, 0, 0, null) }.dispose()
          opaque(image, 0, 0, 32, 16)
-@@ -621,7 +671,8 @@ object SkinLibrary {
+@@ -621,7 +673,8 @@ object SkinLibrary {
          hash.lowercase().takeIf { HASH_PATTERN.matches(it) }?.let { File(cacheDir, "$it.png") }
  
      private fun readCache(hash: String): BufferedImage? {
@@ -412,7 +476,7 @@ index f4f9358..4e8fba1 100644
          val image = runCatching { file.readBytes() }.getOrNull()?.let(::decode)
          if (image == null) runCatching { file.delete() }
          return image
-@@ -637,6 +688,64 @@ object SkinLibrary {
+@@ -637,6 +690,64 @@ object SkinLibrary {
          file.writeBytes(bytes)
      }
  
@@ -492,10 +556,10 @@ index e9a93a3..3b32c8a 100644
  import org.polyfrost.oneconfig.api.ui.v1.components.TextField
 diff --git a/src/main/kotlin/org/polyfrost/polyplus/client/gui/AppearancePlayerHead.kt b/src/main/kotlin/org/polyfrost/polyplus/client/gui/AppearancePlayerHead.kt
 new file mode 100644
-index 0000000..a458eb4
+index 0000000..a03129c
 --- /dev/null
 +++ b/src/main/kotlin/org/polyfrost/polyplus/client/gui/AppearancePlayerHead.kt
-@@ -0,0 +1,81 @@
+@@ -0,0 +1,82 @@
 +@file:OptIn(ExperimentalOneConfigUiApi::class)
 +
 +package org.polyfrost.polyplus.client.gui
@@ -525,6 +589,7 @@ index 0000000..a458eb4
 +import org.polyfrost.oneconfig.api.ui.v1.ExperimentalOneConfigUiApi
 +import org.polyfrost.oneconfig.api.ui.v1.components.PlayerHead
 +import org.polyfrost.polyplus.client.cosmetics.OfflineAppearance
++import org.polyfrost.polyplus.client.cosmetics.outfits.SkinLibrary
 +import org.polyfrost.polyplus.client.utils.ClientPlatform
 +import java.awt.image.BufferedImage
 +import java.nio.file.Files
@@ -552,7 +617,7 @@ index 0000000..a458eb4
 +                if (bytes == null) { head = null; previous = null }
 +                else if (previous?.contentEquals(bytes) != true) {
 +                    runCatching {
-+                        val image = OfflineAppearance.decode(bytes, false)
++                        val image = SkinLibrary.previewImage(OfflineAppearance.decode(bytes, false))
 +                        val face = BufferedImage(8, 8, BufferedImage.TYPE_INT_ARGB)
 +                        face.createGraphics().also { graphics ->
 +                            try {
@@ -667,7 +732,7 @@ index 7c816a8..c11657b 100644
                  }
              }
 diff --git a/src/main/kotlin/org/polyfrost/polyplus/client/gui/menuwardrobe/MenuWardrobePage.kt b/src/main/kotlin/org/polyfrost/polyplus/client/gui/menuwardrobe/MenuWardrobePage.kt
-index f0a232b..3591d14 100644
+index f0a232b..39cea47 100644
 --- a/src/main/kotlin/org/polyfrost/polyplus/client/gui/menuwardrobe/MenuWardrobePage.kt
 +++ b/src/main/kotlin/org/polyfrost/polyplus/client/gui/menuwardrobe/MenuWardrobePage.kt
 @@ -11,6 +11,7 @@ import androidx.compose.foundation.Canvas
@@ -689,6 +754,15 @@ index f0a232b..3591d14 100644
  import org.polyfrost.polyplus.client.cosmetics.MojangCapeService
  import org.polyfrost.polyplus.client.cosmetics.MojangCapeState
  import org.polyfrost.polyplus.client.cosmetics.outfits.OutfitLibrary
+@@ -121,7 +126,7 @@ private fun capeNote(state: MojangCapeState): String? = when (state) {
+ @Composable
+ internal fun WardrobePage(onBack: () -> Unit, onMarketplace: () -> Unit) {
+     var consent by rememberOnlineConsent()
+-    WardrobeContent(consent, onBack, onMarketplace) { consent = true }
++    WardrobeContent(consent && !OfflineAppearance.enabled, onBack, onMarketplace) { consent = true }
+ }
+ 
+ @Composable
 @@ -144,8 +149,8 @@ private fun WardrobeContent(online: Boolean, onBack: () -> Unit, onMarketplace:
      val rotation = remember { PreviewRotation(FRONT_YAW) }
  
@@ -883,6 +957,30 @@ index 0000000..aa6d37b
 +        Text(if (busy) "Working..." else message)
 +    }
 +}
+diff --git a/src/main/kotlin/org/polyfrost/polyplus/client/gui/wardrobe/WardrobeLibrary.kt b/src/main/kotlin/org/polyfrost/polyplus/client/gui/wardrobe/WardrobeLibrary.kt
+index db34609..547bc0b 100644
+--- a/src/main/kotlin/org/polyfrost/polyplus/client/gui/wardrobe/WardrobeLibrary.kt
++++ b/src/main/kotlin/org/polyfrost/polyplus/client/gui/wardrobe/WardrobeLibrary.kt
+@@ -60,6 +60,7 @@ import org.polyfrost.polyplus.client.cosmetics.CosmeticAssetCache
+ import org.polyfrost.polyplus.client.cosmetics.CosmeticCatalog
+ import org.polyfrost.polyplus.client.cosmetics.CosmeticEquipment
+ import org.polyfrost.polyplus.client.cosmetics.MojangCapeService
++import org.polyfrost.polyplus.client.cosmetics.OfflineAppearance
+ import org.polyfrost.polyplus.client.cosmetics.MojangCapeState
+ import org.polyfrost.polyplus.client.cosmetics.PetDefinition
+ import org.polyfrost.polyplus.client.cosmetics.outfits.LibraryState
+@@ -156,8 +157,9 @@ internal fun rememberSkinPreview(skin: PlayerSkinInfo?): SelectionPreview? {
+     val skinVersion = SkinLibrary.textureVersion
+     val base = CosmeticCatalog.localEquipped().equipped
+     val preview = remember(skin, skinVersion) { skin?.let(::previewSkin) }
+-    val source = remember(base, installs, textureVersion, mojangState, preview) {
+-        outfitPreviewSource(base, MojangCapeService.localCapeTexture(), preview)
++    val localCape = OfflineAppearance.cape(ClientPlatform.localPlayerUuid())
++    val source = remember(base, installs, textureVersion, mojangState, preview, localCape) {
++        outfitPreviewSource(base, localCape ?: MojangCapeService.localCapeTexture(), preview)
+     }
+     if (skin == null) return null
+     return SelectionPreview(source, BodySlot.Hat in base)
 diff --git a/src/main/kotlin/org/polyfrost/polyplus/client/gui/wardrobe/WardrobeShell.kt b/src/main/kotlin/org/polyfrost/polyplus/client/gui/wardrobe/WardrobeShell.kt
 index b244784..79f6ef6 100644
 --- a/src/main/kotlin/org/polyfrost/polyplus/client/gui/wardrobe/WardrobeShell.kt
@@ -978,6 +1076,54 @@ index d66f8d2..5812e5a 100644
              val ownedItems = owned(type)
              val shopItems = shop(type)
              if (type == CosmeticType.Cape) {
+diff --git a/src/test/kotlin/org/polyfrost/polyplus/test/LocalEntityAppearanceTest.kt b/src/test/kotlin/org/polyfrost/polyplus/test/LocalEntityAppearanceTest.kt
+new file mode 100644
+index 0000000..4ce52f5
+--- /dev/null
++++ b/src/test/kotlin/org/polyfrost/polyplus/test/LocalEntityAppearanceTest.kt
+@@ -0,0 +1,42 @@
++package org.polyfrost.polyplus.test
++
++import org.junit.jupiter.api.Assertions.assertEquals
++import org.junit.jupiter.api.Assertions.assertNotEquals
++import org.junit.jupiter.api.Assertions.assertNull
++import org.junit.jupiter.api.Test
++import org.polyfrost.polyplus.client.cosmetics.LocalEntityAppearance
++import java.util.UUID
++
++class LocalEntityAppearanceTest {
++    private data class Player(var uuid: UUID)
++
++    @Test
++    fun `the live player keeps the local texture when the server replaces its uuid`() {
++        val sessionId = UUID.fromString("c5b5aba2-2e11-3d27-90f6-01ef193d7b45")
++        val player = Player(sessionId)
++        val selectedSkin = "profile-$sessionId-skin.png"
++        assertEquals(selectedSkin, LocalEntityAppearance.resolve(player, player) { selectedSkin })
++        player.uuid = UUID.fromString("fe1baf0b-4fa7-4126-b467-cc2a85b9d80b")
++        assertNotEquals(sessionId, player.uuid)
++        assertEquals(selectedSkin, LocalEntityAppearance.resolve(player, player) { selectedSkin })
++    }
++
++    @Test
++    fun `a different player with the same uuid does not obtain the local texture`() {
++        val uuid = UUID.fromString("c5b5aba2-2e11-3d27-90f6-01ef193d7b45")
++        val local = Player(uuid)
++        val remote = Player(uuid)
++        assertEquals(local, remote)
++        var reads = 0
++        assertNull(LocalEntityAppearance.resolve(remote, local) { reads++; "local-cape.png" })
++        assertEquals(0, reads)
++    }
++
++    @Test
++    fun `a world without a live player does not read local entity textures`() {
++        val candidate = Player(UUID.fromString("c5b5aba2-2e11-3d27-90f6-01ef193d7b45"))
++        var reads = 0
++        assertNull(LocalEntityAppearance.resolve(candidate, null) { reads++; "local-skin.png" })
++        assertEquals(0, reads)
++    }
++}
 diff --git a/src/test/kotlin/org/polyfrost/polyplus/test/LocalSkinIndexTest.kt b/src/test/kotlin/org/polyfrost/polyplus/test/LocalSkinIndexTest.kt
 new file mode 100644
 index 0000000..e9a1956
