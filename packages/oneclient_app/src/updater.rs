@@ -141,6 +141,10 @@ fn can_self_update() -> bool {
 }
 
 fn check_for_update() -> anyhow::Result<Option<Update>> {
+    // Upstream installers do not contain this fork's bundled local wardrobe.
+    if cfg!(feature = "local-appearance") {
+        return Ok(None);
+    }
     let current = env!("CARGO_PKG_VERSION").parse()?;
     let config = Config {
         endpoints: vec![UPDATER_ENDPOINT.parse()?],

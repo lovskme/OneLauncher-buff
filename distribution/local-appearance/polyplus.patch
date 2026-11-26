@@ -1,12 +1,20 @@
 diff --git a/src/main/java/org/polyfrost/polyplus/mixin/client/cosmetics/MixinAbstractClientPlayer.java b/src/main/java/org/polyfrost/polyplus/mixin/client/cosmetics/MixinAbstractClientPlayer.java
-index 5b41160..01cf4a9 100644
+index 5b41160..ad69a74 100644
 --- a/src/main/java/org/polyfrost/polyplus/mixin/client/cosmetics/MixinAbstractClientPlayer.java
 +++ b/src/main/java/org/polyfrost/polyplus/mixin/client/cosmetics/MixinAbstractClientPlayer.java
-@@ -153,6 +153,8 @@ public abstract class MixinAbstractClientPlayer extends PlayerEntity implements
+@@ -96,6 +96,7 @@ import org.polyfrost.polyplus.client.cosmetics.CosmeticEquipment;
+ import org.polyfrost.polyplus.client.cosmetics.LocalSkinOverride;
+ import org.polyfrost.polyplus.client.cosmetics.MojangCapeService;
+ import org.polyfrost.polyplus.client.cosmetics.MojangSkinService;
++import org.polyfrost.polyplus.client.cosmetics.OfflineAppearance;
+ import org.polyfrost.polyplus.client.cosmetics.access.PlayerCosmeticsAccess;
+ import org.polyfrost.polyplus.client.cosmetics.access.PlayerEmotesAccess;
+ import org.polyfrost.polyplus.client.emotes.playback.EmoteController;
+@@ -153,6 +154,8 @@ public abstract class MixinAbstractClientPlayer extends PlayerEntity implements
      @ModifyReturnValue(method = "getCapeTextureLocation", at = @At("RETURN"))
      private Identifier polyplus$replaceCapeTexture(Identifier original) {
          UUID playerId = ((ClientPlayerEntity) (Object) this).getUuid();
-+        Identifier localCape = org.polyfrost.polyplus.client.cosmetics.OfflineAppearance.cape(playerId);
++        Identifier localCape = OfflineAppearance.cape(playerId);
 +        if (localCape != null) return localCape;
          switch (CapeResolver.decide(playerId, original == null ? null : original.getNamespace())) {
              case POLYPLUS:

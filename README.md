@@ -103,6 +103,8 @@ launching that instance with an offline profile. Open the in-game Wardrobe to
 change your skin/cape there too; both screens share the same per-profile files.
 Changes are visible on this client and do not sync to other players. Microsoft
 profiles retain the upstream online wardrobe. Paid catalog ownership is unchanged.
+This custom build does not install upstream launcher updates automatically,
+because those installers would replace the local wardrobe changes.
 
 Build with `--features local-appearance` after compiling the component using
 the Windows workflow. Source changes and build details are in

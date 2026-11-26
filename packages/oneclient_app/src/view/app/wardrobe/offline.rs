@@ -71,7 +71,9 @@ impl Component for OfflineWardrobe {
         });
         let current = appearance.read().clone();
         let enabled = !*busy.read();
-        let valid_name = oneclient_auth::validate_offline_username(name.read().trim()).is_ok();
+        let lookup_name = name.read().trim().to_string();
+        let valid_name = !lookup_name.is_empty() && lookup_name.len() <= 16
+            && lookup_name.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_');
         let content = rect().vertical().width(Size::fill()).padding(Gaps::new_all(24.)).spacing(16.)
             .child(label().text(t("oneclient.wardrobe.local.title")).font_size(text_size(24.)).color(colors::fg_primary()))
             .child(label().text(t("oneclient.wardrobe.local.hint")).font_size(text_size(13.)).color(colors::fg_secondary()))
