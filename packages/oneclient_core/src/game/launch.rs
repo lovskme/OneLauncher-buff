@@ -428,12 +428,6 @@ async fn start(
         crate::game::link_cluster_logs(&cluster, &cwd).await;
     }
 
-    #[cfg(feature = "local-appearance")]
-    if account.is_offline() && cluster.mc_version == "1.8.9" && cluster.mc_loader == GameLoader::Ornithe {
-        crate::offline_appearance::prepare_game(&cwd.join("mods")).await
-            .map_err(|message| std::io::Error::other(message))?;
-    }
-
     if matches!(cluster.mc_loader, GameLoader::Fabric | GameLoader::Ornithe) {
         crate::game::fabric::drop_stale_remapped_jars(
             &cwd,
@@ -484,6 +478,14 @@ async fn start(
     ) {
         tracing::debug!(cluster_id, mods_dir = %mods_dir.display(), "redirecting fabric mods folder");
         jvm_args.push(arg);
+    }
+
+    #[cfg(feature = "local-appearance")]
+    if account.is_offline() && cluster.mc_version == "1.8.9" && cluster.mc_loader == GameLoader::Ornithe {
+        let active_mods = crate::offline_appearance::active_mods_dir(&cwd, &jvm_args);
+        crate::offline_appearance::prepare_game(&active_mods).await
+            .map_err(std::io::Error::other)?;
+        tracing::info!(cluster_id, mods_dir = %active_mods.display(), "installed local appearance component");
     }
 
     let crash_dir = cluster.dir()?.join("crash-reports");
