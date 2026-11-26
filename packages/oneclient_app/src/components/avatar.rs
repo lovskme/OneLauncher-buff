@@ -1,3 +1,4 @@
+use std::hash::{Hash, Hasher};
 use bytes::Bytes;
 use freya::elements::image::{ImageHandle, image};
 use freya::engine::prelude::{Paint, SkData, SkImage, raster_n32_premul};
@@ -49,6 +50,12 @@ impl LayoutExt for Avatar {
 impl ContainerSizeExt for Avatar {}
 
 impl Component for Avatar {
+    fn render_key(&self) -> DiffKey {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.uuid.hash(&mut hasher);
+        DiffKey::U64(hasher.finish())
+    }
+
     fn render(&self) -> impl IntoElement {
         let (skin_bytes, _is_slim) = use_player_skin(self.uuid.clone());
 

@@ -28,7 +28,7 @@ jobs:
         id: source
         shell: bash
         run: |
-          if [[ "$POLYPLUS_REVISION" == "462663858973b1298bc30820e707854997fcffe4" && "$(git hash-object distribution/local-appearance/polyplus.patch)" == "076efd3eac31fcd8811a3f992e672de497204cf2" ]]; then
+          if [[ "$POLYPLUS_REVISION" == "462663858973b1298bc30820e707854997fcffe4" && "$(git hash-object distribution/local-appearance/polyplus.patch)" == "cc497562588af38f32a8a079b43341071bbeb4a1" ]]; then
             echo "validated=true" >> "$GITHUB_OUTPUT"
           fi
       - name: Reuse component that passed build, tests and lint
@@ -38,7 +38,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: local-appearance-1.8.9
-          run-id: 45882143691
+          run-id: 45891179104
           github-token: ${{ github.token }}
           path: appearance-output
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262

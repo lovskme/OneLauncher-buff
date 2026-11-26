@@ -1,3 +1,4 @@
+use std::hash::{Hash, Hasher};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -312,6 +313,12 @@ impl Player {
 }
 
 impl Component for PlayerModel {
+    fn render_key(&self) -> DiffKey {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.uuid.hash(&mut hasher);
+        DiffKey::U64(hasher.finish())
+    }
+
     fn render(&self) -> impl IntoElement {
         let (profile_skin, profile_slim) = use_player_skin(self.uuid.clone());
         let local = crate::hooks::use_local_appearance(&self.uuid);
