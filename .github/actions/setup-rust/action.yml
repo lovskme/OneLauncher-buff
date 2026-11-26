@@ -40,3 +40,4 @@ runs:
         # Release builds are long and can fail late (signing, notarization,
         # upload). Without this the whole compile is thrown away on those runs.
         cache-on-failure: true
+        cache-workspace-crates: true

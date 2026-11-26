@@ -100,6 +100,32 @@ jobs:
           name: local-appearance-1.8.9
           path: packages/oneclient_core/assets
 
+      - name: Test avatar redraw stability and visible skin changes
+        run: cargo test --locked --release -p oneclient_avatar_cache_tests --lib
+
+      - name: Prove the avatar tests detect the previous redraw loop
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          $path = 'packages/oneclient_app/src/components/avatar_cache.rs'
+          $source = [IO.File]::ReadAllText($path)
+          if (-not $source.Contains('png == skin_bytes')) { throw 'Missing production cache comparison.' }
+          try {
+            $regression = $source.Replace('png == skin_bytes', 'png.as_ptr() == skin_bytes.as_ptr()')
+            [IO.File]::WriteAllText($path, $regression, [Text.UTF8Encoding]::new($false))
+            $output = & cargo test --locked --release -p oneclient_avatar_cache_tests --lib fresh_png_allocations_settle_without_repainting_forever -- --nocapture 2>&1
+            $result = $LASTEXITCODE
+            $output | Write-Output
+            if ($result -eq 0 -or ($output -join "`n") -notmatch 'same skin requested unbounded renders') {
+              throw 'The previous redraw loop was not reproduced by the regression test.'
+            }
+          } finally {
+            [IO.File]::WriteAllText($path, $source, [Text.UTF8Encoding]::new($false))
+          }
+          cargo test --locked --release -p oneclient_avatar_cache_tests --lib
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Test authentication and offline profiles
         run: cargo test --locked -p oneclient_auth
 

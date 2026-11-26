@@ -1,16 +1,13 @@
 use std::hash::{Hash, Hasher};
-use bytes::Bytes;
-use freya::elements::image::{ImageHandle, image};
-use freya::engine::prelude::{Paint, SkData, SkImage, raster_n32_premul};
+use freya::elements::image::image;
 use freya::prelude::*;
 
 use crate::hooks::use_player_skin;
+use super::avatar_cache::use_avatar_head;
 use crate::theme::rounded;
 
 const AVATAR_SIZE: f32 = 32.;
 const FACE: f32 = 8.;
-const HEAD_FACE: (f32, f32) = (8., 8.);
-const HEAD_OVERLAY: (f32, f32) = (40., 8.);
 
 #[derive(PartialEq, Clone)]
 pub struct Avatar {
@@ -63,19 +60,7 @@ impl Component for Avatar {
         let texel = texel_px(self.size, scale_factor);
         let face = face_size(texel, scale_factor);
 
-        let mut cache = use_state(|| None::<(usize, u32, ImageHandle)>);
-        let src_ptr = skin_bytes.as_ptr() as usize;
-        let cached = cache.read().clone();
-        let head = match cached {
-            Some((ptr, scale, holder)) if ptr == src_ptr && scale == texel => Some(holder),
-            _ => {
-                let holder = compose_head(&skin_bytes, texel);
-                if let Some(holder) = &holder {
-                    cache.set(Some((src_ptr, texel, holder.clone())));
-                }
-                holder
-            }
-        };
+        let head = use_avatar_head(skin_bytes, texel);
 
         let radius = rounded(self.radius.unwrap_or(self.size / 4.));
         let mut nudge = use_state(|| (0f32, 0f32));
@@ -117,25 +102,6 @@ fn face_size(texel: u32, scale_factor: f32) -> f32 {
     texel as f32 * FACE / scale_or_one(scale_factor)
 }
 
-fn compose_head(skin_bytes: &Bytes, texel: u32) -> Option<ImageHandle> {
-    let data = unsafe { SkData::new_bytes(skin_bytes) };
-    let skin = SkImage::from_encoded(data)?;
-    let skin = skin.make_raster_image(None, None).unwrap_or(skin);
-
-    let side = (FACE as u32 * texel) as i32;
-    let mut surface = raster_n32_premul((side, side))?;
-    {
-        let canvas = surface.canvas();
-        let paint = Paint::default();
-        canvas.scale((texel as f32, texel as f32));
-
-        canvas.draw_image(&skin, (-HEAD_FACE.0, -HEAD_FACE.1), Some(&paint));
-        canvas.draw_image(&skin, (-HEAD_OVERLAY.0, -HEAD_OVERLAY.1), Some(&paint));
-    }
-
-    let head = surface.image_snapshot();
-    Some(ImageHandle::new(head, skin_bytes.clone()))
-}
 
 #[cfg(test)]
 mod tests {

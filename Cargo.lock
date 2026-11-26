@@ -4729,6 +4729,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "oneclient_avatar_cache_tests"
+version = "2.12.1"
+dependencies = [
+ "bytes 1.12.1",
+ "freya",
+ "freya-testing",
+ "image",
+]
+
+[[package]]
 name = "oneclient_cluster"
 version = "2.12.1"
 dependencies = [

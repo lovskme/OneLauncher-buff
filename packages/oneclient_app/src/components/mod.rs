@@ -2,6 +2,7 @@ mod account_switcher;
 mod active_cluster_panel;
 mod asset_image;
 mod avatar;
+mod avatar_cache;
 mod blocked_downloads_popup;
 mod bundle_choices_popup;
 mod bundled_install_warning;

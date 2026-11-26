@@ -1,0 +1,19 @@
+# Compiles the production cache module alone so UI regressions do not need
+# to link the entire launcher or initialize accounts, databases and networking.
+[package]
+name = "oneclient_avatar_cache_tests"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+path = "../oneclient_app/src/components/avatar_cache.rs"
+
+[dependencies]
+bytes.workspace = true
+freya.workspace = true
+
+[dev-dependencies]
+freya-testing.workspace = true
+image.workspace = true

@@ -246,6 +246,7 @@ pub fn init_filtered(filter: impl FnOnce() -> String) -> LauncherResult<()> {
         std::env::consts::OS,
         std::env::consts::ARCH,
     );
+    tracing::info!(revision = option_env!("GITHUB_SHA").unwrap_or("local"), "launcher build revision");
 
     Ok(())
 }

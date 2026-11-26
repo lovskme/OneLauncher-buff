@@ -40,3 +40,14 @@ Validation covers PNG decoding, local index persistence and damaged metadata,
 final JVM mods-folder resolution, missing components and the nested legacy
 mods layout. A successful installer build does not constitute an interactive
 Minecraft gameplay test.
+
+The launcher head cache owns and compares PNG bytes rather than comparing
+allocation addresses. Query snapshots share immutable `Bytes`; cloning a
+snapshot no longer allocates a different skin buffer on every redraw. The
+previous combination of cloned `Vec<u8>` snapshots and pointer-based cache keys
+could continuously invalidate a head widget before the home screen settled.
+The isolated `oneclient_avatar_cache_tests` package compiles the production
+cache module directly. Its renderer tests check bounded redraws with fresh,
+identical PNG allocations and verify that changing a skin changes avatar pixels.
+CI also temporarily reinstates the old pointer comparison, requires that the
+redraw test fails with that fault, restores the source and reruns the fixed tests.

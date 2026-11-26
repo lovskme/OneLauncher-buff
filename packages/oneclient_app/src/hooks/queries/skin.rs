@@ -1,28 +1,43 @@
 use bytes::Bytes;
 use freya::query::{Query, QueryCapability, use_query};
-use oneclient_core::offline_appearance::{self, Appearance};
+use oneclient_core::offline_appearance;
 use uuid::Uuid;
 use freya::prelude::*;
 
 use crate::AppAssets;
 
+/// Cloneable query snapshots keep the immutable PNG allocations shared.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LocalAppearance {
+    pub skin: Option<Bytes>,
+    pub cape: Option<Bytes>,
+    pub slim: bool,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct LocalAppearanceQuery;
 
 impl QueryCapability for LocalAppearanceQuery {
-    type Ok = Appearance;
+    type Ok = LocalAppearance;
     type Err = String;
     type Keys = Option<Uuid>;
 
-    async fn run(&self, keys: &Self::Keys) -> Result<Appearance, String> {
+    async fn run(&self, keys: &Self::Keys) -> Result<LocalAppearance, String> {
         match keys {
-            Some(id) => offline_appearance::load(*id).await,
-            None => Ok(Appearance::default()),
+            Some(id) => {
+                let appearance = offline_appearance::load(*id).await?;
+                Ok(LocalAppearance {
+                    skin: appearance.skin.map(Bytes::from),
+                    cape: appearance.cape.map(Bytes::from),
+                    slim: appearance.slim,
+                })
+            }
+            None => Ok(LocalAppearance::default()),
         }
     }
 }
 
-pub fn use_local_appearance(uuid: &str) -> Appearance {
+pub fn use_local_appearance(uuid: &str) -> LocalAppearance {
     let id = Uuid::parse_str(uuid).ok();
     let query = use_query(Query::new(id, LocalAppearanceQuery));
     let dir = id.and_then(|id| offline_appearance::profile_dir(id).ok());
@@ -47,7 +62,7 @@ pub fn use_player_skin(uuid: String) -> (Bytes, bool) {
 
     let default_slim = (java_string_hash(&uuid) & 1) == 1;
 
-    if let Some(skin) = local.skin { return (skin.into(), local.slim); }
+    if let Some(skin) = local.skin { return (skin, local.slim); }
 
     match crate::hooks::loaded_image(skin_url.as_deref(), &skin_query) {
         Some((_, bytes)) => (bytes, is_slim),
