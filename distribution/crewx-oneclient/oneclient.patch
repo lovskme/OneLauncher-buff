@@ -55,10 +55,18 @@ index 625547b..b1c1d9e 100644
          }
      }
 diff --git a/src/main/java/crewx/inject/CrewXBootstrap.java b/src/main/java/crewx/inject/CrewXBootstrap.java
-index f9fdff4..b772159 100644
+index f9fdff4..5d6fa3c 100644
 --- a/src/main/java/crewx/inject/CrewXBootstrap.java
 +++ b/src/main/java/crewx/inject/CrewXBootstrap.java
-@@ -526,7 +526,7 @@ public final class CrewXBootstrap {
+@@ -91,7 +91,6 @@ public final class CrewXBootstrap {
+             "net.minecraft.block.BlockPane",
+             "net.minecraft.block.BlockWeb",
+             "net.minecraft.client.renderer.BlockRendererDispatcher",
+-            "crewx.module.modules.misc.BedNuker",
+     };
+ 
+     private CrewXBootstrap() {
+@@ -526,7 +525,7 @@ public final class CrewXBootstrap {
          }
      }
  
@@ -129,6 +137,39 @@ index 98ddcbc..524132f 100644
              if (mc == null || mc.currentScreen != null) {
                  return;
              }
+diff --git a/src/main/java/crewx/inject/CrewXRuntimeTransformer.java b/src/main/java/crewx/inject/CrewXRuntimeTransformer.java
+index 38a7f8f..f08c106 100644
+--- a/src/main/java/crewx/inject/CrewXRuntimeTransformer.java
++++ b/src/main/java/crewx/inject/CrewXRuntimeTransformer.java
+@@ -1650,11 +1650,13 @@ public final class CrewXRuntimeTransformer implements Opcodes {
+                 if ("onLivingUpdate".equals(name) && "()V".equals(descriptor)) {
+                     return new MethodVisitor(ASM9, redirectNoSlow(redirectPotionChecks(base))) {
+                         private boolean moveInputDispatched;
+-                        @Override public void visitCode() {
+-                            super.visitCode();
+-                            callHook(mv, "onLivingUpdate", "()V");
+-                        }
+                         @Override public void visitMethodInsn(int opcode, String owner, String calledName, String calledDescriptor, boolean isInterface) {
++                            // Match MixinEntityPlayerSP: after input has been updated,
++                            // immediately before the superclass living-update call.
++                            if (opcode == INVOKESPECIAL && "onLivingUpdate".equals(calledName)
++                                    && "()V".equals(calledDescriptor)) {
++                                callHook(mv, "onLivingUpdate", "()V");
++                            }
+                             super.visitMethodInsn(opcode, owner, calledName, calledDescriptor, isInterface);
+                             // OneClient retains the named owner but renames this method to m_... .
+                             boolean movementOwner = "net/minecraft/util/MovementInput".equals(owner)
+@@ -1662,7 +1664,9 @@ public final class CrewXRuntimeTransformer implements Opcodes {
+                                     || (NotchMappings.isCheatBreaker()
+                                         && CheatBreakerMappings.classInternalName("net/minecraft/util/MovementInput")
+                                                 .equals(owner));
+-                            if (!moveInputDispatched && movementOwner && "()V".equals(calledDescriptor)) {
++                            if (!moveInputDispatched
++                                    && (movementOwner || "updatePlayerMoveState".equals(calledName))
++                                    && "()V".equals(calledDescriptor)) {
+                                 callHook(mv, "onMoveInput", "()V");
+                                 moveInputDispatched = true;
+                                 CrewXBootstrap.log("transform: movement input hook after " + owner + "." + calledName);
 diff --git a/src/main/java/crewx/inject/MappingRepository.java b/src/main/java/crewx/inject/MappingRepository.java
 index b05db25..69cd984 100644
 --- a/src/main/java/crewx/inject/MappingRepository.java
