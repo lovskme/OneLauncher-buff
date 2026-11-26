@@ -114,7 +114,7 @@ pub fn active_mods_dir(cwd: &Path, jvm_args: &[String]) -> PathBuf {
 
 /// Replaces only materialized PolyPlus copies, preserving the shared artifact cache.
 #[cfg(feature = "local-appearance")]
-pub async fn prepare_game(mods: &Path) -> Result<(), String> {
+pub async fn prepare_game(mods: &Path, cluster_folder: &str) -> Result<(), String> {
     const JAR: &[u8] = include_bytes!("../assets/local-appearance-1.8.9.jar");
     let mut folders = vec![(mods.to_path_buf(), 0)];
     let mut replaced = 0;
@@ -124,7 +124,8 @@ pub async fn prepare_game(mods: &Path) -> Result<(), String> {
         while let Some(entry) = entries.next_entry().await.map_err(|e| e.to_string())? {
             let path = entry.path();
             // Older loader layouts put the cluster link one level below mods.
-            if depth == 0 && path.is_dir() {
+            if depth == 0 && path.is_dir()
+                && path.file_name().is_some_and(|name| name == cluster_folder || name == "1.8.9") {
                 folders.push((path, 1));
             } else if path.extension().is_some_and(|ext| ext == "jar") {
                 let manifest = oneclient_content::packages::local_manifest::read_jar_manifest(&path).await;
@@ -157,6 +158,28 @@ mod tests {
         let args = vec!["-Dfabric.modsFolder=old".into(), "-Xmx2G".into(),
             "-Dfabric.modsFolder=cluster with spaces/mods".into()];
         assert_eq!(active_mods_dir(cwd, &args), cwd.join("cluster with spaces/mods"));
+    }
+
+    #[cfg(feature = "local-appearance")]
+    #[tokio::test]
+    async fn missing_component_is_an_error_instead_of_a_silent_launch() {
+        let root = polyio::testing::ScratchDir::new("appearance_missing");
+        assert!(prepare_game(root.path(), "cluster").await.unwrap_err().contains("not found"));
+    }
+
+    #[cfg(feature = "local-appearance")]
+    #[tokio::test]
+    async fn installs_component_in_nested_legacy_mods_layout() {
+        const JAR: &[u8] = include_bytes!("../assets/local-appearance-1.8.9.jar");
+        let root = polyio::testing::ScratchDir::new("appearance_nested");
+        let nested = root.path().join("cluster");
+        polyio::create_dir_all(&nested).await.unwrap();
+        let path = nested.join("polyplus.jar");
+        let mut previous = JAR.to_vec();
+        previous.extend_from_slice(b"old materialized copy");
+        tokio::fs::write(&path, previous).await.unwrap();
+        prepare_game(root.path(), "cluster").await.unwrap();
+        assert_eq!(tokio::fs::read(path).await.unwrap(), JAR);
     }
 
     #[test]

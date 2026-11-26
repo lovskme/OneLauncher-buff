@@ -203,22 +203,47 @@ index 0000000..13d7522
 +        stamp = null
 +    }
 +}
+diff --git a/src/main/kotlin/org/polyfrost/polyplus/client/cosmetics/outfits/LocalSkinIndex.kt b/src/main/kotlin/org/polyfrost/polyplus/client/cosmetics/outfits/LocalSkinIndex.kt
+new file mode 100644
+index 0000000..a39a5dc
+--- /dev/null
++++ b/src/main/kotlin/org/polyfrost/polyplus/client/cosmetics/outfits/LocalSkinIndex.kt
+@@ -0,0 +1,21 @@
++package org.polyfrost.polyplus.client.cosmetics.outfits
++
++import kotlinx.serialization.encodeToString
++import kotlinx.serialization.json.Json
++import org.polyfrost.polyplus.client.cosmetics.OfflineAppearance
++import java.nio.file.Files
++import java.nio.file.Path
++
++/** Per-profile metadata. A malformed index is reported rather than overwritten. */
++internal class LocalSkinIndex(private val directory: Path) {
++    fun read(): List<PlayerSkinInfo> {
++        val file = directory.resolve("library.json")
++        if (!Files.exists(file)) return emptyList()
++        return Json.decodeFromString<List<SkinResponse>>(Files.readString(file)).map { it.toInfo() }
++    }
++
++    fun write(values: List<PlayerSkinInfo>) {
++        val responses = values.map { SkinResponse(it.id, it.name, it.model.serializedName, it.url, it.hash, it.favorite, it.createdAt) }
++        OfflineAppearance.write(directory.resolve("library.json"), Json.encodeToString(responses).toByteArray())
++    }
++}
 diff --git a/src/main/kotlin/org/polyfrost/polyplus/client/cosmetics/outfits/SkinLibrary.kt b/src/main/kotlin/org/polyfrost/polyplus/client/cosmetics/outfits/SkinLibrary.kt
-index f4f9358..64569d1 100644
+index f4f9358..4e8fba1 100644
 --- a/src/main/kotlin/org/polyfrost/polyplus/client/cosmetics/outfits/SkinLibrary.kt
 +++ b/src/main/kotlin/org/polyfrost/polyplus/client/cosmetics/outfits/SkinLibrary.kt
-@@ -23,6 +23,10 @@ import kotlinx.coroutines.launch
+@@ -23,6 +23,8 @@ import kotlinx.coroutines.launch
  import kotlinx.coroutines.sync.Mutex
  import kotlinx.coroutines.sync.withLock
  import kotlinx.coroutines.withContext
-+import kotlinx.serialization.encodeToString
-+import kotlinx.serialization.json.Json
 +import kotlinx.serialization.json.jsonPrimitive
 +import kotlinx.serialization.json.contentOrNull
  import kotlinx.serialization.json.JsonObject
  import kotlinx.serialization.json.buildJsonObject
  import kotlinx.serialization.json.put
-@@ -31,6 +35,7 @@ import org.apache.logging.log4j.LogManager
+@@ -31,6 +33,7 @@ import org.apache.logging.log4j.LogManager
  import org.polyfrost.polyplus.PolyPlusConstants
  import org.polyfrost.polyplus.client.PolyPlusClient
  import org.polyfrost.polyplus.client.cosmetics.MojangSkin
@@ -226,7 +251,7 @@ index f4f9358..64569d1 100644
  import org.polyfrost.polyplus.client.cosmetics.MojangSkinException
  import org.polyfrost.polyplus.client.cosmetics.MojangSkinService
  import org.polyfrost.polyplus.client.cosmetics.assets.RemoteTextures
-@@ -42,6 +47,8 @@ import java.awt.image.BufferedImage
+@@ -42,6 +45,8 @@ import java.awt.image.BufferedImage
  import java.io.ByteArrayInputStream
  import java.io.File
  import java.util.UUID
@@ -235,7 +260,7 @@ index f4f9358..64569d1 100644
  import java.util.concurrent.ConcurrentHashMap
  import java.util.concurrent.atomic.AtomicReference
  import javax.imageio.ImageIO
-@@ -143,6 +150,7 @@ object SkinLibrary {
+@@ -143,6 +148,7 @@ object SkinLibrary {
      }
  
      suspend fun refresh(): Result<Unit> {
@@ -243,7 +268,7 @@ index f4f9358..64569d1 100644
          val job = synchronized(this) {
              refreshJob?.takeIf { it.isActive } ?: PolyPlusClient.SCOPE.async { refreshLocked() }.also { refreshJob = it }
          }
-@@ -153,6 +161,7 @@ object SkinLibrary {
+@@ -153,6 +159,7 @@ object SkinLibrary {
          recordShared(fresh = false, background = background)
  
      suspend fun addFromBytes(png: ByteArray, name: String?, model: SkinModel): Result<PlayerSkinInfo> {
@@ -251,7 +276,7 @@ index f4f9358..64569d1 100644
          if (!OutfitApi.allowed()) return unavailable()
          runSuspendCatching { withContext(Dispatchers.IO) { validate(png) } }
              .onFailure { return Result.failure(it) }
-@@ -160,6 +169,9 @@ object SkinLibrary {
+@@ -160,6 +167,9 @@ object SkinLibrary {
      }
  
      suspend fun addFromUrl(url: String, name: String?, model: SkinModel): Result<PlayerSkinInfo> {
@@ -261,7 +286,7 @@ index f4f9358..64569d1 100644
          if (!OutfitApi.allowed()) return unavailable()
          val link = url.trim()
          if (!link.startsWith("https://", ignoreCase = true) && !link.startsWith("http://", ignoreCase = true)) {
-@@ -169,7 +181,7 @@ object SkinLibrary {
+@@ -169,7 +179,7 @@ object SkinLibrary {
      }
  
      suspend fun addFromUsername(username: String): Result<PlayerSkinInfo> {
@@ -270,7 +295,7 @@ index f4f9358..64569d1 100644
          val name = username.trim()
          if (!USERNAME_PATTERN.matches(name)) {
              return Result.failure(OutfitException("That isn't a valid Minecraft username."))
-@@ -180,6 +192,9 @@ object SkinLibrary {
+@@ -180,6 +190,9 @@ object SkinLibrary {
          val skin = MojangSkinService.profileSkin(uuid)
              .getOrElse { return Result.failure(mojangFailure(it)) }
              ?: return Result.failure(OutfitException("$name is using a default skin."))
@@ -280,7 +305,7 @@ index f4f9358..64569d1 100644
          busy = true
          try {
              return recordLock.withLock { record(skin, name, ClientPlatform.localPlayerUuid()) }
-@@ -189,6 +204,13 @@ object SkinLibrary {
+@@ -189,6 +202,13 @@ object SkinLibrary {
      }
  
      suspend fun wear(id: Int): Result<Unit> {
@@ -294,7 +319,7 @@ index f4f9358..64569d1 100644
          if (!OutfitApi.allowed()) return unavailable()
          val skin = skins.firstOrNull { it.id == id }
              ?: return Result.failure(OutfitException("That skin is no longer in your library."))
-@@ -219,6 +241,12 @@ object SkinLibrary {
+@@ -219,6 +239,12 @@ object SkinLibrary {
          patch(id, buildJsonObject { put("favorite", favorite) })
  
      suspend fun setModel(id: Int, model: SkinModel): Result<PlayerSkinInfo> {
@@ -307,7 +332,7 @@ index f4f9358..64569d1 100644
          val worn = wornSkinId() == id
          val owner = ClientPlatform.localPlayerUuid()
          val updated = patch(id, buildJsonObject { put("model", model.serializedName) })
-@@ -239,6 +267,15 @@ object SkinLibrary {
+@@ -239,6 +265,15 @@ object SkinLibrary {
      }
  
      suspend fun delete(id: Int): Result<Unit> {
@@ -323,7 +348,7 @@ index f4f9358..64569d1 100644
          if (!OutfitApi.allowed()) return unavailable()
          return OutfitApi.send<Unit>(HttpMethod.Delete, "/skins/$id")
              .onSuccess {
-@@ -297,6 +334,7 @@ object SkinLibrary {
+@@ -297,6 +332,7 @@ object SkinLibrary {
      }
  
      internal fun recordInBackground(force: Boolean = false, background: Boolean = !force) {
@@ -331,7 +356,7 @@ index f4f9358..64569d1 100644
          if (!OutfitApi.allowed()) return
          val owner = runCatching { ClientPlatform.localPlayerUuid() }.getOrNull() ?: return
          if (!force && lastRecordOwner == owner && System.currentTimeMillis() - lastRecordAt < RECORD_INTERVAL_MS) return
-@@ -312,6 +350,7 @@ object SkinLibrary {
+@@ -312,6 +348,7 @@ object SkinLibrary {
      }
  
      private suspend fun recordShared(fresh: Boolean, background: Boolean): Result<PlayerSkinInfo?> {
@@ -339,7 +364,7 @@ index f4f9358..64569d1 100644
          if (!OutfitApi.allowed()) return OutfitApi.privacyFailure()
          val job = recordJobLock.withLock {
              val running = recordJob?.takeIf { it.isActive }
-@@ -450,6 +489,19 @@ object SkinLibrary {
+@@ -450,6 +487,19 @@ object SkinLibrary {
      }
  
      private suspend fun patch(id: Int, body: JsonObject): Result<PlayerSkinInfo> {
@@ -359,7 +384,7 @@ index f4f9358..64569d1 100644
          if (!OutfitApi.allowed()) return unavailable()
          return OutfitApi.send<SkinResponse>(HttpMethod.Patch, "/skins/$id", body)
              .map { it.toInfo() }
-@@ -576,7 +628,7 @@ object SkinLibrary {
+@@ -576,7 +626,7 @@ object SkinLibrary {
          *///?}
      }
  
@@ -368,7 +393,7 @@ index f4f9358..64569d1 100644
          if (source.height != 32) return source
          val image = BufferedImage(64, 64, BufferedImage.TYPE_INT_ARGB)
          val graphics = image.createGraphics()
-@@ -586,7 +638,7 @@ object SkinLibrary {
+@@ -586,7 +636,7 @@ object SkinLibrary {
          return image
      }
  
@@ -377,7 +402,7 @@ index f4f9358..64569d1 100644
          val image = BufferedImage(source.width, source.height, BufferedImage.TYPE_INT_ARGB)
          image.createGraphics().apply { drawImage(source, 0, 0, null) }.dispose()
          opaque(image, 0, 0, 32, 16)
-@@ -621,7 +673,8 @@ object SkinLibrary {
+@@ -621,7 +671,8 @@ object SkinLibrary {
          hash.lowercase().takeIf { HASH_PATTERN.matches(it) }?.let { File(cacheDir, "$it.png") }
  
      private fun readCache(hash: String): BufferedImage? {
@@ -387,25 +412,35 @@ index f4f9358..64569d1 100644
          val image = runCatching { file.readBytes() }.getOrNull()?.let(::decode)
          if (image == null) runCatching { file.delete() }
          return image
-@@ -637,6 +690,54 @@ object SkinLibrary {
+@@ -637,6 +688,64 @@ object SkinLibrary {
          file.writeBytes(bytes)
      }
  
 +    private fun localPng(hash: String) = OfflineAppearance.directory().resolve("library/$hash.png")
 +
 +    private fun persistLocal(values: List<PlayerSkinInfo>) {
-+        val responses = values.map { SkinResponse(it.id, it.name, it.model.serializedName, it.url, it.hash, it.favorite, it.createdAt) }
-+        OfflineAppearance.write(OfflineAppearance.directory().resolve("library.json"), Json.encodeToString(responses).toByteArray())
++        LocalSkinIndex(OfflineAppearance.directory()).write(values)
 +    }
 +
 +    private suspend fun refreshLocal(): Result<Unit> = requestLock.withLock {
 +        runSuspendCatching {
 +            withContext(Dispatchers.IO) {
 +                val dir = OfflineAppearance.directory()
-+                val index = dir.resolve("library.json")
-+                skins = if (Files.isRegularFile(index)) Json.decodeFromString<List<SkinResponse>>(Files.readString(index)).map { it.toInfo() } else emptyList()
++                skins = LocalSkinIndex(dir).read()
 +                val current = dir.resolve("skin.png")
-+                wornHash = if (Files.isRegularFile(current)) ClientPlatform.localPlayerUuid() to localHash(Files.readAllBytes(current)) else null
++                wornHash = if (Files.isRegularFile(current)) {
++                    val bytes = Files.readAllBytes(current)
++                    OfflineAppearance.decode(bytes, false)
++                    val hash = localHash(bytes)
++                    if (skins.none { it.hash == hash }) {
++                        OfflineAppearance.write(localPng(hash), bytes)
++                        val model = if (OfflineAppearance.slimModel()) SkinModel.Slim else SkinModel.Classic
++                        skins = listOf(PlayerSkinInfo((skins.maxOfOrNull { it.id } ?: 0) + 1,
++                            "Current skin", model, "local:$hash", hash, false, "")) + skins
++                        persistLocal(skins)
++                    }
++                    ClientPlatform.localPlayerUuid() to hash
++                } else null
 +                loadedFor = ClientPlatform.localPlayerUuid()
 +                state = LibraryState.Loaded
 +                limit = Int.MAX_VALUE
@@ -542,6 +577,37 @@ index 0000000..a458eb4
 +        }
 +    }
 +}
+diff --git a/src/main/kotlin/org/polyfrost/polyplus/client/gui/PolyPlusCosmeticsScreen.kt b/src/main/kotlin/org/polyfrost/polyplus/client/gui/PolyPlusCosmeticsScreen.kt
+index b2a05fe..b4268bd 100644
+--- a/src/main/kotlin/org/polyfrost/polyplus/client/gui/PolyPlusCosmeticsScreen.kt
++++ b/src/main/kotlin/org/polyfrost/polyplus/client/gui/PolyPlusCosmeticsScreen.kt
+@@ -16,6 +16,7 @@ import org.polyfrost.polyplus.client.cosmetics.BillingService
+ import org.polyfrost.polyplus.client.cosmetics.CosmeticCatalog
+ import org.polyfrost.polyplus.client.cosmetics.CosmeticLoadProgress
+ import org.polyfrost.polyplus.client.cosmetics.CosmeticStore
++import org.polyfrost.polyplus.client.cosmetics.OfflineAppearance
+ import org.polyfrost.polyplus.client.cosmetics.MojangCapeService
+ import org.polyfrost.polyplus.client.gui.wardrobe.CartEntry
+ import org.polyfrost.polyplus.client.gui.wardrobe.CosmeticsLoadingScreen
+@@ -36,6 +37,18 @@ import org.polyfrost.polyplus.client.utils.ClientPlatform
+ 
+ @Composable
+ internal fun PolyPlusCosmeticsScreen() {
++    if (OfflineAppearance.enabled) {
++        var message by remember { mutableStateOf<String?>(null) }
++        WardrobeShell(
++            items = emptyList(), ownedIds = emptySet(), cart = emptyList(), status = message,
++            variantPicks = emptyMap(), auraColor = null, historyReloadKey = 0,
++            onStatus = { message = it }, onRefresh = {}, onPreviewAuraColor = {}, onSelectAuraColor = {},
++            onSelectVariant = { _, _ -> }, onEquip = {}, onAddToCart = { _, _ -> },
++            onBuyNow = { _, _ -> }, onBuyBundle = {}, onRemoveFromCart = {}, onCheckout = {},
++            polyPlusAvailable = false,
++        )
++        return
++    }
+     var consent by rememberOnlineConsent()
+     if (!consent) {
+         MinecraftCapesOnlyScreen { consent = true }
 diff --git a/src/main/kotlin/org/polyfrost/polyplus/client/gui/PolyPlusMainMenuScreen.kt b/src/main/kotlin/org/polyfrost/polyplus/client/gui/PolyPlusMainMenuScreen.kt
 index 0da6c7e..fafddba 100644
 --- a/src/main/kotlin/org/polyfrost/polyplus/client/gui/PolyPlusMainMenuScreen.kt
@@ -581,8 +647,27 @@ index f280033..c6ecf4f 100644
  import org.polyfrost.oneconfig.api.ui.v1.ExperimentalOneConfigUiApi
  import androidx.compose.animation.core.FastOutSlowInEasing
  import androidx.compose.animation.core.animateFloatAsState
+diff --git a/src/main/kotlin/org/polyfrost/polyplus/client/gui/menuwardrobe/MenuWardrobeDrawer.kt b/src/main/kotlin/org/polyfrost/polyplus/client/gui/menuwardrobe/MenuWardrobeDrawer.kt
+index 7c816a8..c11657b 100644
+--- a/src/main/kotlin/org/polyfrost/polyplus/client/gui/menuwardrobe/MenuWardrobeDrawer.kt
++++ b/src/main/kotlin/org/polyfrost/polyplus/client/gui/menuwardrobe/MenuWardrobeDrawer.kt
+@@ -143,12 +143,13 @@ internal fun DrawerHomePage(
+     top: @Composable () -> Unit,
+     bottom: (@Composable () -> Unit)?,
+     libraries: Boolean,
++    localOnly: Boolean = false,
+ ) {
+     PanelPageColumn {
+         top()
+         if (libraries) {
+             PanelSection(null, divider = false) {
+-                for (view in WardrobeView.entries) {
++                for (view in WardrobeView.entries.filter { !localOnly || it == WardrobeView.Skins }) {
+                     DrillRow(view.icon, view.label, null, { state.open(DrawerPage.Library(view)) })
+                 }
+             }
 diff --git a/src/main/kotlin/org/polyfrost/polyplus/client/gui/menuwardrobe/MenuWardrobePage.kt b/src/main/kotlin/org/polyfrost/polyplus/client/gui/menuwardrobe/MenuWardrobePage.kt
-index f0a232b..41331da 100644
+index f0a232b..34483a9 100644
 --- a/src/main/kotlin/org/polyfrost/polyplus/client/gui/menuwardrobe/MenuWardrobePage.kt
 +++ b/src/main/kotlin/org/polyfrost/polyplus/client/gui/menuwardrobe/MenuWardrobePage.kt
 @@ -11,6 +11,7 @@ import androidx.compose.foundation.Canvas
@@ -593,16 +678,28 @@ index f0a232b..41331da 100644
  import androidx.compose.foundation.layout.BoxWithConstraints
  import androidx.compose.foundation.layout.fillMaxHeight
  import androidx.compose.foundation.layout.fillMaxSize
-@@ -44,6 +45,8 @@ import org.polyfrost.polyplus.client.PolyPlusClient
+@@ -44,6 +45,9 @@ import org.polyfrost.polyplus.client.PolyPlusClient
  import org.polyfrost.polyplus.client.cosmetics.CosmeticCatalog
  import org.polyfrost.polyplus.client.cosmetics.CosmeticLoadProgress
  import org.polyfrost.polyplus.client.cosmetics.MojangCape
++import org.polyfrost.oneconfig.api.ui.v1.theme.OneConfigTheme
 +import org.polyfrost.polyplus.client.cosmetics.OfflineAppearance
 +import org.polyfrost.polyplus.client.gui.wardrobe.LocalCapeControls
  import org.polyfrost.polyplus.client.cosmetics.MojangCapeService
  import org.polyfrost.polyplus.client.cosmetics.MojangCapeState
  import org.polyfrost.polyplus.client.cosmetics.outfits.OutfitLibrary
-@@ -161,7 +164,7 @@ private fun WardrobeContent(online: Boolean, onBack: () -> Unit, onMarketplace:
+@@ -144,8 +148,8 @@ private fun WardrobeContent(online: Boolean, onBack: () -> Unit, onMarketplace:
+     val rotation = remember { PreviewRotation(FRONT_YAW) }
+ 
+     LaunchedEffect(online) {
+-        if (online) PolyPlusClient.refreshCosmeticsIfNeeded() else drawer.open(DrawerPage.Slot(CosmeticType.Cape))
+-        MojangCapeService.refreshIfNeeded()
++        if (online) PolyPlusClient.refreshCosmeticsIfNeeded() else if (!OfflineAppearance.enabled) drawer.open(DrawerPage.Slot(CosmeticType.Cape))
++        if (!OfflineAppearance.enabled) MojangCapeService.refreshIfNeeded()
+         while (true) {
+             loadState = CosmeticLoadProgress.snapshot()
+             liveScene = LobbyScene.showing()
+@@ -161,7 +165,7 @@ private fun WardrobeContent(online: Boolean, onBack: () -> Unit, onMarketplace:
              WardrobeView.Outfits -> OutfitLibrary.refreshIfNeeded(reload = true)
              WardrobeView.Skins -> {
                  SkinLibrary.refreshIfNeeded()
@@ -611,7 +708,7 @@ index f0a232b..41331da 100644
              }
              WardrobeView.Wheel -> if (store.byType.isEmpty()) store.load()
              else -> Unit
-@@ -237,7 +240,7 @@ private fun WardrobeContent(online: Boolean, onBack: () -> Unit, onMarketplace:
+@@ -237,10 +241,10 @@ private fun WardrobeContent(online: Boolean, onBack: () -> Unit, onMarketplace:
          retryLoad()
          PolyPlusClient.SCOPE.launch { MojangCapeService.refresh() }
          if (online && view == WardrobeView.Outfits) PolyPlusClient.SCOPE.launch { OutfitLibrary.refresh() }
@@ -619,13 +716,35 @@ index f0a232b..41331da 100644
 +        if ((online || OfflineAppearance.enabled) && view == WardrobeView.Skins) {
              PolyPlusClient.SCOPE.launch {
                  SkinLibrary.refresh()
-                 OutfitLibrary.refresh()
-@@ -449,9 +452,12 @@ private fun WardrobeContent(online: Boolean, onBack: () -> Unit, onMarketplace:
+-                OutfitLibrary.refresh()
++                if (!OfflineAppearance.enabled) OutfitLibrary.refresh()
+             }
+         }
+         refreshKey++
+@@ -303,7 +307,7 @@ private fun WardrobeContent(online: Boolean, onBack: () -> Unit, onMarketplace:
+                 },
+             ).takeIf { type == CosmeticType.Aura && entries.isNotEmpty() },
+             forceToggle = online && type == CosmeticType.Cape,
+-            note = capeNote(mojangState).takeIf { type == CosmeticType.Cape },
++            note = (if (OfflineAppearance.enabled) "Import a PNG cape for this local profile." else capeNote(mojangState)).takeIf { type == CosmeticType.Cape },
+             status = status,
+             picksToWheel = wheelPicking,
+         )
+@@ -430,6 +434,7 @@ private fun WardrobeContent(online: Boolean, onBack: () -> Unit, onMarketplace:
+                     drawer,
+                     top = {
+                         when {
++                            OfflineAppearance.enabled -> Text("Local skins and capes", color = OneConfigTheme.current.textColor)
+                             online -> OutfitPanel(onStatus = { status = it }, modifier = Modifier.fillMaxWidth().height(OutfitRowHeight))
+                             consentCard -> ConsentStep(
+                                 "Cosmetics and outfits need online services.",
+@@ -449,9 +454,13 @@ private fun WardrobeContent(online: Boolean, onBack: () -> Unit, onMarketplace:
                              { Box(Modifier.fillMaxWidth().height(LoadingHeight)) { CosmeticsLoadingScreen(loadState, ::retryLoad) } }
                          }
                      },
 -                    libraries = online,
 +                    libraries = online || OfflineAppearance.enabled,
++                    localOnly = OfflineAppearance.enabled,
                  )
 -                is DrawerPage.Slot -> DrawerSlotPage(pickerModel(page.type), wearing(page.type))
 +                is DrawerPage.Slot -> Column {
@@ -764,7 +883,7 @@ index 0000000..aa6d37b
 +    }
 +}
 diff --git a/src/main/kotlin/org/polyfrost/polyplus/client/gui/wardrobe/WardrobeShell.kt b/src/main/kotlin/org/polyfrost/polyplus/client/gui/wardrobe/WardrobeShell.kt
-index b244784..6a53549 100644
+index b244784..79f6ef6 100644
 --- a/src/main/kotlin/org/polyfrost/polyplus/client/gui/wardrobe/WardrobeShell.kt
 +++ b/src/main/kotlin/org/polyfrost/polyplus/client/gui/wardrobe/WardrobeShell.kt
 @@ -31,6 +31,7 @@ import org.polyfrost.oneconfig.api.ui.v1.ExperimentalOneConfigUiApi
@@ -775,9 +894,12 @@ index b244784..6a53549 100644
  import org.polyfrost.polyplus.client.cosmetics.MojangCapeService
  import org.polyfrost.polyplus.client.cosmetics.MojangCapeState
  import org.polyfrost.polyplus.client.cosmetics.outfits.OutfitLibrary
-@@ -75,7 +76,7 @@ internal fun WardrobeShell(
+@@ -73,9 +74,9 @@ internal fun WardrobeShell(
+             store.featuredLoading = false
+         }
      }
-     LaunchedEffect(Unit) { MojangCapeService.refreshIfNeeded() }
+-    LaunchedEffect(Unit) { MojangCapeService.refreshIfNeeded() }
++    LaunchedEffect(Unit) { if (!OfflineAppearance.enabled) MojangCapeService.refreshIfNeeded() }
  
 -    val sections = if (polyPlusAvailable) WardrobeSection.entries else listOf(WardrobeSection.Cosmetics)
 +    val sections = if (polyPlusAvailable) WardrobeSection.entries else if (OfflineAppearance.enabled) listOf(WardrobeSection.Skins, WardrobeSection.Cosmetics) else listOf(WardrobeSection.Cosmetics)
@@ -799,7 +921,7 @@ index b244784..6a53549 100644
              }
              else -> Unit
          }
-@@ -210,7 +211,7 @@ internal fun WardrobeShell(
+@@ -210,10 +211,10 @@ internal fun WardrobeShell(
                      if (polyPlusAvailable && section == WardrobeSection.Outfits) {
                          scope.launch { OutfitLibrary.refresh() }
                      }
@@ -807,7 +929,96 @@ index b244784..6a53549 100644
 +                    if ((polyPlusAvailable || OfflineAppearance.enabled) && section == WardrobeSection.Skins) {
                          scope.launch {
                              SkinLibrary.refresh()
-                             OutfitLibrary.refresh()
+-                            OutfitLibrary.refresh()
++                            if (!OfflineAppearance.enabled) OutfitLibrary.refresh()
+                         }
+                     }
+                 },
+@@ -222,6 +223,7 @@ internal fun WardrobeShell(
+             if (showHistory) {
+                 HistoryScreen(ownedIds = ownedIds, reloadKey = historyReloadKey)
+             } else {
++                if (OfflineAppearance.enabled && section == WardrobeSection.Cosmetics) LocalCapeControls()
+                 WardrobeGrid(
+                     entries = entries,
+                     state = gridState,
+diff --git a/src/main/kotlin/org/polyfrost/polyplus/client/gui/wardrobe/WardrobeStoreData.kt b/src/main/kotlin/org/polyfrost/polyplus/client/gui/wardrobe/WardrobeStoreData.kt
+index d66f8d2..5812e5a 100644
+--- a/src/main/kotlin/org/polyfrost/polyplus/client/gui/wardrobe/WardrobeStoreData.kt
++++ b/src/main/kotlin/org/polyfrost/polyplus/client/gui/wardrobe/WardrobeStoreData.kt
+@@ -11,6 +11,7 @@ import org.polyfrost.polyplus.client.cosmetics.CosmeticStore
+ import org.polyfrost.polyplus.client.cosmetics.MojangCapeState
+ import org.polyfrost.polyplus.client.cosmetics.outfits.LibraryState
+ import org.polyfrost.polyplus.client.cosmetics.outfits.OutfitLibrary
++import org.polyfrost.polyplus.client.cosmetics.OfflineAppearance
+ import org.polyfrost.polyplus.client.cosmetics.outfits.SkinLibrary
+ import org.polyfrost.polyplus.client.network.http.responses.BundleInfo
+ import org.polyfrost.polyplus.client.network.http.responses.CosmeticStoreInfo
+@@ -184,7 +185,7 @@ internal fun buildWardrobeEntries(
+             val library = SkinLibrary.skins
+             entries += WardrobeEntry.LibraryHeader(
+                 WardrobeSection.Skins,
+-                "${library.size} of ${SkinLibrary.limit} saved. Every skin you wear is saved here automatically.",
++                if (OfflineAppearance.enabled) "${library.size} local skins saved." else "${library.size} of ${SkinLibrary.limit} saved. Every skin you wear is saved here automatically.",
+                 action = "Add skin",
+             )
+             when (val state = SkinLibrary.state) {
+@@ -235,6 +236,13 @@ internal fun buildWardrobeEntries(
+         }
+ 
+         WardrobeSection.Cosmetics -> for (type in WARDROBE_COSMETIC_TYPES) {
++            if (OfflineAppearance.enabled) {
++                if (type == CosmeticType.Cape) {
++                    entries += WardrobeEntry.Divider("Local cape", anchor = true)
++                    entries += WardrobeEntry.Note("local-cape", "Import a 64 x 32 PNG above. Your local client displays it automatically.")
++                }
++                continue
++            }
+             val ownedItems = owned(type)
+             val shopItems = shop(type)
+             if (type == CosmeticType.Cape) {
+diff --git a/src/test/kotlin/org/polyfrost/polyplus/test/LocalSkinIndexTest.kt b/src/test/kotlin/org/polyfrost/polyplus/test/LocalSkinIndexTest.kt
+new file mode 100644
+index 0000000..e9a1956
+--- /dev/null
++++ b/src/test/kotlin/org/polyfrost/polyplus/test/LocalSkinIndexTest.kt
+@@ -0,0 +1,36 @@
++package org.polyfrost.polyplus.test
++
++import org.junit.jupiter.api.Assertions.assertEquals
++import org.junit.jupiter.api.Assertions.assertThrows
++import org.junit.jupiter.api.Test
++import org.junit.jupiter.api.io.TempDir
++import org.polyfrost.polyplus.client.cosmetics.outfits.LocalSkinIndex
++import org.polyfrost.polyplus.client.cosmetics.outfits.PlayerSkinInfo
++import org.polyfrost.polyplus.client.cosmetics.outfits.SkinModel
++import java.nio.file.Files
++import java.nio.file.Path
++
++class LocalSkinIndexTest {
++    @TempDir
++    lateinit var directory: Path
++
++    @Test
++    fun `local metadata survives restart without an online account`() {
++        val entries = listOf(PlayerSkinInfo(1, "Skin with quotes \" and accents á", SkinModel.Slim,
++            "local:abc", "abc", true, ""))
++        LocalSkinIndex(directory).write(entries)
++        assertEquals(entries, LocalSkinIndex(directory).read())
++        LocalSkinIndex(directory).write(entries.map { it.copy(name = "Renamed", model = SkinModel.Classic) })
++        assertEquals("Renamed", LocalSkinIndex(directory).read().single().name)
++        LocalSkinIndex(directory).write(emptyList())
++        assertEquals(emptyList<PlayerSkinInfo>(), LocalSkinIndex(directory).read())
++    }
++
++    @Test
++    fun `a damaged index is preserved for recovery`() {
++        val path = directory.resolve("library.json")
++        Files.writeString(path, "broken metadata")
++        assertThrows(Exception::class.java) { LocalSkinIndex(directory).read() }
++        assertEquals("broken metadata", Files.readString(path))
++    }
++}
 diff --git a/src/test/kotlin/org/polyfrost/polyplus/test/OfflineAppearanceTest.kt b/src/test/kotlin/org/polyfrost/polyplus/test/OfflineAppearanceTest.kt
 new file mode 100644
 index 0000000..daa3b21

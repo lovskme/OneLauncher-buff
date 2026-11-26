@@ -483,7 +483,7 @@ async fn start(
     #[cfg(feature = "local-appearance")]
     if account.is_offline() && cluster.mc_version == "1.8.9" && cluster.mc_loader == GameLoader::Ornithe {
         let active_mods = crate::offline_appearance::active_mods_dir(&cwd, &jvm_args);
-        crate::offline_appearance::prepare_game(&active_mods).await
+        crate::offline_appearance::prepare_game(&active_mods, &cluster.folder_name).await
             .map_err(std::io::Error::other)?;
         tracing::info!(cluster_id, mods_dir = %active_mods.display(), "installed local appearance component");
     }
