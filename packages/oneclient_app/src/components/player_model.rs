@@ -314,6 +314,7 @@ impl Player {
 impl Component for PlayerModel {
     fn render(&self) -> impl IntoElement {
         let (profile_skin, profile_slim) = use_player_skin(self.uuid.clone());
+        let local = crate::hooks::use_local_appearance(&self.uuid);
         let (skin, slim) = self.skin.clone().unwrap_or((profile_skin, profile_slim));
 
         let player = use_hook(|| Rc::new(RefCell::new(Player::default())));
@@ -322,7 +323,7 @@ impl Component for PlayerModel {
         let look = Look {
             skin,
             slim,
-            cape: self.cape.clone(),
+            cape: self.cape.clone().or_else(|| local.cape.map(Into::into)),
             cosmetics: self.cosmetics.clone(),
             emote: self.emote.clone(),
         };

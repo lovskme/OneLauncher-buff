@@ -46,15 +46,16 @@ index f544e4e..8ee9a52 100644
          return textureId.startsWith(DEFAULT_SKIN_PREFIX) || textureId in current.replaceablePaths
 diff --git a/src/main/kotlin/org/polyfrost/polyplus/client/cosmetics/OfflineAppearance.kt b/src/main/kotlin/org/polyfrost/polyplus/client/cosmetics/OfflineAppearance.kt
 new file mode 100644
-index 0000000..26923da
+index 0000000..13d7522
 --- /dev/null
 +++ b/src/main/kotlin/org/polyfrost/polyplus/client/cosmetics/OfflineAppearance.kt
-@@ -0,0 +1,144 @@
+@@ -0,0 +1,153 @@
 +package org.polyfrost.polyplus.client.cosmetics
 +
 +import kotlinx.coroutines.Dispatchers
 +import kotlinx.coroutines.launch
 +import net.minecraft.resources.Identifier
++import org.apache.logging.log4j.LogManager
 +import org.polyfrost.polyplus.client.PolyPlusClient
 +import org.polyfrost.polyplus.client.cosmetics.assets.RemoteTextures
 +import org.polyfrost.polyplus.client.cosmetics.outfits.SkinLibrary
@@ -72,6 +73,9 @@ index 0000000..26923da
 +
 +/** Local profile textures. No account tokens or cosmetic-store calls are used. */
 +object OfflineAppearance {
++    private val logger = LogManager.getLogger("polyplus/local-appearance")
++    init { logger.info("Local appearance component active; profile directory: {}", rootPath()) }
++    private fun rootPath() = System.getProperty("oneclient.offline.appearance.dir") ?: "not supplied"
 +    private const val LIMIT = 1024 * 1024
 +    private val root: Path? = System.getProperty("oneclient.offline.appearance.dir")?.let { Path.of(it) }
 +    val enabled: Boolean get() = root?.fileName?.toString() == ClientPlatform.localPlayerUuid().toString() && MojangAuth.accessToken() == null
@@ -110,8 +114,8 @@ index 0000000..26923da
 +                val capeId = loadTexture(dir.resolve("cape.png"), true, owner)
 +                look = Look(owner, skinId?.let { PreviewSkin(it, slim) }, capeId)
 +                stamp = fingerprint
-+            } catch (_: Exception) {
-+                // Keep the last complete texture while a file is being replaced.
++            } catch (error: Exception) {
++                logger.warn("Could not refresh local appearance", error)
 +            } finally {
 +                pending = false
 +            }
@@ -149,7 +153,12 @@ index 0000000..26923da
 +        return ImageIO.read(ByteArrayInputStream(bytes)) ?: error("Invalid PNG.")
 +    }
 +
-+    private fun write(file: Path, bytes: ByteArray) {
++    internal fun directory(): Path {
++        check(enabled) { "Local appearance is not active for this profile." }
++        return root!!
++    }
++
++    internal fun write(file: Path, bytes: ByteArray) {
 +        Files.createDirectories(file.parent)
 +        val temp = Files.createTempFile(file.parent, ".appearance-", ".tmp")
 +        try {
@@ -195,10 +204,162 @@ index 0000000..26923da
 +    }
 +}
 diff --git a/src/main/kotlin/org/polyfrost/polyplus/client/cosmetics/outfits/SkinLibrary.kt b/src/main/kotlin/org/polyfrost/polyplus/client/cosmetics/outfits/SkinLibrary.kt
-index f4f9358..eb703c7 100644
+index f4f9358..64569d1 100644
 --- a/src/main/kotlin/org/polyfrost/polyplus/client/cosmetics/outfits/SkinLibrary.kt
 +++ b/src/main/kotlin/org/polyfrost/polyplus/client/cosmetics/outfits/SkinLibrary.kt
-@@ -576,7 +576,7 @@ object SkinLibrary {
+@@ -23,6 +23,10 @@ import kotlinx.coroutines.launch
+ import kotlinx.coroutines.sync.Mutex
+ import kotlinx.coroutines.sync.withLock
+ import kotlinx.coroutines.withContext
++import kotlinx.serialization.encodeToString
++import kotlinx.serialization.json.Json
++import kotlinx.serialization.json.jsonPrimitive
++import kotlinx.serialization.json.contentOrNull
+ import kotlinx.serialization.json.JsonObject
+ import kotlinx.serialization.json.buildJsonObject
+ import kotlinx.serialization.json.put
+@@ -31,6 +35,7 @@ import org.apache.logging.log4j.LogManager
+ import org.polyfrost.polyplus.PolyPlusConstants
+ import org.polyfrost.polyplus.client.PolyPlusClient
+ import org.polyfrost.polyplus.client.cosmetics.MojangSkin
++import org.polyfrost.polyplus.client.cosmetics.OfflineAppearance
+ import org.polyfrost.polyplus.client.cosmetics.MojangSkinException
+ import org.polyfrost.polyplus.client.cosmetics.MojangSkinService
+ import org.polyfrost.polyplus.client.cosmetics.assets.RemoteTextures
+@@ -42,6 +47,8 @@ import java.awt.image.BufferedImage
+ import java.io.ByteArrayInputStream
+ import java.io.File
+ import java.util.UUID
++import java.nio.file.Files
++import java.security.MessageDigest
+ import java.util.concurrent.ConcurrentHashMap
+ import java.util.concurrent.atomic.AtomicReference
+ import javax.imageio.ImageIO
+@@ -143,6 +150,7 @@ object SkinLibrary {
+     }
+ 
+     suspend fun refresh(): Result<Unit> {
++        if (OfflineAppearance.enabled) return refreshLocal()
+         val job = synchronized(this) {
+             refreshJob?.takeIf { it.isActive } ?: PolyPlusClient.SCOPE.async { refreshLocked() }.also { refreshJob = it }
+         }
+@@ -153,6 +161,7 @@ object SkinLibrary {
+         recordShared(fresh = false, background = background)
+ 
+     suspend fun addFromBytes(png: ByteArray, name: String?, model: SkinModel): Result<PlayerSkinInfo> {
++        if (OfflineAppearance.enabled) return addLocal(png, name, model, wear = true)
+         if (!OutfitApi.allowed()) return unavailable()
+         runSuspendCatching { withContext(Dispatchers.IO) { validate(png) } }
+             .onFailure { return Result.failure(it) }
+@@ -160,6 +169,9 @@ object SkinLibrary {
+     }
+ 
+     suspend fun addFromUrl(url: String, name: String?, model: SkinModel): Result<PlayerSkinInfo> {
++        if (OfflineAppearance.enabled) return fetchSkin(url).fold(
++            onSuccess = { addLocal(it, name, model, wear = true) }, onFailure = { Result.failure(it) },
++        )
+         if (!OutfitApi.allowed()) return unavailable()
+         val link = url.trim()
+         if (!link.startsWith("https://", ignoreCase = true) && !link.startsWith("http://", ignoreCase = true)) {
+@@ -169,7 +181,7 @@ object SkinLibrary {
+     }
+ 
+     suspend fun addFromUsername(username: String): Result<PlayerSkinInfo> {
+-        if (!OutfitApi.allowed()) return unavailable()
++        if (!OfflineAppearance.enabled && !OutfitApi.allowed()) return unavailable()
+         val name = username.trim()
+         if (!USERNAME_PATTERN.matches(name)) {
+             return Result.failure(OutfitException("That isn't a valid Minecraft username."))
+@@ -180,6 +192,9 @@ object SkinLibrary {
+         val skin = MojangSkinService.profileSkin(uuid)
+             .getOrElse { return Result.failure(mojangFailure(it)) }
+             ?: return Result.failure(OutfitException("$name is using a default skin."))
++        if (OfflineAppearance.enabled) return fetchSkin(skin.url).fold(
++            onSuccess = { addLocal(it, name, skin.model, wear = false) }, onFailure = { Result.failure(it) },
++        )
+         busy = true
+         try {
+             return recordLock.withLock { record(skin, name, ClientPlatform.localPlayerUuid()) }
+@@ -189,6 +204,13 @@ object SkinLibrary {
+     }
+ 
+     suspend fun wear(id: Int): Result<Unit> {
++        if (OfflineAppearance.enabled) return runSuspendCatching {
++            withContext(Dispatchers.IO) {
++                val skin = skins.first { it.id == id }
++                OfflineAppearance.save(Files.readAllBytes(localPng(skin.hash)), false, skin.model == SkinModel.Slim)
++                wornHash = ClientPlatform.localPlayerUuid() to skin.hash
++            }
++        }
+         if (!OutfitApi.allowed()) return unavailable()
+         val skin = skins.firstOrNull { it.id == id }
+             ?: return Result.failure(OutfitException("That skin is no longer in your library."))
+@@ -219,6 +241,12 @@ object SkinLibrary {
+         patch(id, buildJsonObject { put("favorite", favorite) })
+ 
+     suspend fun setModel(id: Int, model: SkinModel): Result<PlayerSkinInfo> {
++        if (OfflineAppearance.enabled) {
++            val worn = wornSkinId() == id
++            val result = patch(id, buildJsonObject { put("model", model.serializedName) })
++            if (result.isSuccess && worn) wear(id).getOrElse { return Result.failure(it) }
++            return result
++        }
+         val worn = wornSkinId() == id
+         val owner = ClientPlatform.localPlayerUuid()
+         val updated = patch(id, buildJsonObject { put("model", model.serializedName) })
+@@ -239,6 +267,15 @@ object SkinLibrary {
+     }
+ 
+     suspend fun delete(id: Int): Result<Unit> {
++        if (OfflineAppearance.enabled) return runSuspendCatching {
++            withContext(Dispatchers.IO) {
++                val worn = wornSkinId() == id
++                val updated = skins.filterNot { it.id == id }
++                persistLocal(updated)
++                skins = updated
++                if (worn) { OfflineAppearance.clear(false); wornHash = null }
++            }
++        }
+         if (!OutfitApi.allowed()) return unavailable()
+         return OutfitApi.send<Unit>(HttpMethod.Delete, "/skins/$id")
+             .onSuccess {
+@@ -297,6 +334,7 @@ object SkinLibrary {
+     }
+ 
+     internal fun recordInBackground(force: Boolean = false, background: Boolean = !force) {
++        if (OfflineAppearance.enabled) return
+         if (!OutfitApi.allowed()) return
+         val owner = runCatching { ClientPlatform.localPlayerUuid() }.getOrNull() ?: return
+         if (!force && lastRecordOwner == owner && System.currentTimeMillis() - lastRecordAt < RECORD_INTERVAL_MS) return
+@@ -312,6 +350,7 @@ object SkinLibrary {
+     }
+ 
+     private suspend fun recordShared(fresh: Boolean, background: Boolean): Result<PlayerSkinInfo?> {
++        if (OfflineAppearance.enabled) return Result.success(null)
+         if (!OutfitApi.allowed()) return OutfitApi.privacyFailure()
+         val job = recordJobLock.withLock {
+             val running = recordJob?.takeIf { it.isActive }
+@@ -450,6 +489,19 @@ object SkinLibrary {
+     }
+ 
+     private suspend fun patch(id: Int, body: JsonObject): Result<PlayerSkinInfo> {
++        if (OfflineAppearance.enabled) return runSuspendCatching {
++            withContext(Dispatchers.IO) {
++                val old = skins.first { it.id == id }
++                val updated = old.copy(
++                    name = body["name"]?.jsonPrimitive?.contentOrNull ?: old.name,
++                    model = body["model"]?.jsonPrimitive?.contentOrNull?.let { SkinModel.fromSerialized(it) } ?: old.model,
++                    favorite = body["favorite"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull() ?: old.favorite,
++                )
++                persistLocal(skins.map { if (it.id == id) updated else it })
++                replace(updated)
++                updated
++            }
++        }
+         if (!OutfitApi.allowed()) return unavailable()
+         return OutfitApi.send<SkinResponse>(HttpMethod.Patch, "/skins/$id", body)
+             .map { it.toInfo() }
+@@ -576,7 +628,7 @@ object SkinLibrary {
          *///?}
      }
  
@@ -207,7 +368,7 @@ index f4f9358..eb703c7 100644
          if (source.height != 32) return source
          val image = BufferedImage(64, 64, BufferedImage.TYPE_INT_ARGB)
          val graphics = image.createGraphics()
-@@ -586,7 +586,7 @@ object SkinLibrary {
+@@ -586,7 +638,7 @@ object SkinLibrary {
          return image
      }
  
@@ -216,68 +377,290 @@ index f4f9358..eb703c7 100644
          val image = BufferedImage(source.width, source.height, BufferedImage.TYPE_INT_ARGB)
          image.createGraphics().apply { drawImage(source, 0, 0, null) }.dispose()
          opaque(image, 0, 0, 32, 16)
-diff --git a/src/main/kotlin/org/polyfrost/polyplus/client/gui/PolyPlusCosmeticsScreen.kt b/src/main/kotlin/org/polyfrost/polyplus/client/gui/PolyPlusCosmeticsScreen.kt
-index b2a05fe..84cd351 100644
---- a/src/main/kotlin/org/polyfrost/polyplus/client/gui/PolyPlusCosmeticsScreen.kt
-+++ b/src/main/kotlin/org/polyfrost/polyplus/client/gui/PolyPlusCosmeticsScreen.kt
-@@ -13,6 +13,7 @@ import kotlinx.coroutines.delay
- import kotlinx.coroutines.launch
- import org.polyfrost.polyplus.client.PolyPlusClient
- import org.polyfrost.polyplus.client.cosmetics.BillingService
-+import org.polyfrost.polyplus.client.cosmetics.OfflineAppearance
- import org.polyfrost.polyplus.client.cosmetics.CosmeticCatalog
- import org.polyfrost.polyplus.client.cosmetics.CosmeticLoadProgress
- import org.polyfrost.polyplus.client.cosmetics.CosmeticStore
-@@ -21,6 +22,7 @@ import org.polyfrost.polyplus.client.gui.wardrobe.CartEntry
- import org.polyfrost.polyplus.client.gui.wardrobe.CosmeticsLoadingScreen
- import org.polyfrost.polyplus.client.gui.lobbyshell.rememberOnlineConsent
- import org.polyfrost.polyplus.client.gui.wardrobe.MinecraftCapesOnlyScreen
-+import org.polyfrost.polyplus.client.gui.wardrobe.OfflineAppearancePanel
- import org.polyfrost.polyplus.client.gui.wardrobe.WardrobeShell
- import org.polyfrost.polyplus.client.gui.wardrobe.cartName
- import org.polyfrost.polyplus.client.gui.wardrobe.checkoutFailureMessage
-@@ -36,6 +38,10 @@ import org.polyfrost.polyplus.client.utils.ClientPlatform
+@@ -621,7 +673,8 @@ object SkinLibrary {
+         hash.lowercase().takeIf { HASH_PATTERN.matches(it) }?.let { File(cacheDir, "$it.png") }
  
- @Composable
- internal fun PolyPlusCosmeticsScreen() {
-+    if (OfflineAppearance.enabled) {
-+        OfflineAppearancePanel()
-+        return
+     private fun readCache(hash: String): BufferedImage? {
+-        val file = cacheFile(hash)?.takeIf { it.isFile } ?: return null
++        val local = if (OfflineAppearance.enabled) localPng(hash).toFile().takeIf { it.isFile } else null
++        val file = local ?: cacheFile(hash)?.takeIf { it.isFile } ?: return null
+         val image = runCatching { file.readBytes() }.getOrNull()?.let(::decode)
+         if (image == null) runCatching { file.delete() }
+         return image
+@@ -637,6 +690,54 @@ object SkinLibrary {
+         file.writeBytes(bytes)
+     }
+ 
++    private fun localPng(hash: String) = OfflineAppearance.directory().resolve("library/$hash.png")
++
++    private fun persistLocal(values: List<PlayerSkinInfo>) {
++        val responses = values.map { SkinResponse(it.id, it.name, it.model.serializedName, it.url, it.hash, it.favorite, it.createdAt) }
++        OfflineAppearance.write(OfflineAppearance.directory().resolve("library.json"), Json.encodeToString(responses).toByteArray())
 +    }
-     var consent by rememberOnlineConsent()
-     if (!consent) {
-         MinecraftCapesOnlyScreen { consent = true }
++
++    private suspend fun refreshLocal(): Result<Unit> = requestLock.withLock {
++        runSuspendCatching {
++            withContext(Dispatchers.IO) {
++                val dir = OfflineAppearance.directory()
++                val index = dir.resolve("library.json")
++                skins = if (Files.isRegularFile(index)) Json.decodeFromString<List<SkinResponse>>(Files.readString(index)).map { it.toInfo() } else emptyList()
++                val current = dir.resolve("skin.png")
++                wornHash = if (Files.isRegularFile(current)) ClientPlatform.localPlayerUuid() to localHash(Files.readAllBytes(current)) else null
++                loadedFor = ClientPlatform.localPlayerUuid()
++                state = LibraryState.Loaded
++                limit = Int.MAX_VALUE
++            }
++        }.onFailure { state = LibraryState.Unavailable(it.message ?: "Could not read local skins.") }
++    }
++
++    private fun localHash(bytes: ByteArray) = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
++
++    private suspend fun addLocal(png: ByteArray, name: String?, model: SkinModel, wear: Boolean): Result<PlayerSkinInfo> = requestLock.withLock {
++        runSuspendCatching {
++            withContext(Dispatchers.IO) {
++                OfflineAppearance.decode(png, false)
++                val hash = localHash(png)
++                val old = skins.firstOrNull { it.hash == hash }
++                val info = PlayerSkinInfo(old?.id ?: ((skins.maxOfOrNull { it.id } ?: 0) + 1),
++                    name?.trim()?.takeIf { it.isNotEmpty() } ?: old?.name ?: "Local skin",
++                    model, "local:$hash", hash, old?.favorite ?: false, old?.createdAt ?: "")
++                OfflineAppearance.write(localPng(hash), png)
++                val updated = listOf(info) + skins.filterNot { it.id == info.id }
++                persistLocal(updated)
++                skins = updated
++                loadedFor = ClientPlatform.localPlayerUuid()
++                state = LibraryState.Loaded
++                if (wear) {
++                    OfflineAppearance.save(png, false, model == SkinModel.Slim)
++                    wornHash = ClientPlatform.localPlayerUuid() to hash
++                }
++                info
++            }
++        }
++    }
++
+     private fun replace(skin: PlayerSkinInfo) {
+         val existing = skins
+         skins = if (existing.any { it.id == skin.id }) {
+diff --git a/src/main/kotlin/org/polyfrost/polyplus/client/gui/AccountSwitcher.kt b/src/main/kotlin/org/polyfrost/polyplus/client/gui/AccountSwitcher.kt
+index e9a93a3..3b32c8a 100644
+--- a/src/main/kotlin/org/polyfrost/polyplus/client/gui/AccountSwitcher.kt
++++ b/src/main/kotlin/org/polyfrost/polyplus/client/gui/AccountSwitcher.kt
+@@ -63,7 +63,7 @@ import org.polyfrost.oneconfig.api.ui.v1.components.ControlStyle
+ import org.polyfrost.oneconfig.api.ui.v1.components.Divider
+ import org.polyfrost.oneconfig.api.ui.v1.components.EscapeCloses
+ import org.polyfrost.oneconfig.api.ui.v1.components.IconButton
+-import org.polyfrost.oneconfig.api.ui.v1.components.PlayerHead
++import org.polyfrost.polyplus.client.gui.AppearancePlayerHead as PlayerHead
+ import org.polyfrost.oneconfig.api.ui.v1.components.Text
+ import org.polyfrost.oneconfig.api.ui.v1.components.TextButton
+ import org.polyfrost.oneconfig.api.ui.v1.components.TextField
+diff --git a/src/main/kotlin/org/polyfrost/polyplus/client/gui/AppearancePlayerHead.kt b/src/main/kotlin/org/polyfrost/polyplus/client/gui/AppearancePlayerHead.kt
+new file mode 100644
+index 0000000..a458eb4
+--- /dev/null
++++ b/src/main/kotlin/org/polyfrost/polyplus/client/gui/AppearancePlayerHead.kt
+@@ -0,0 +1,81 @@
++@file:OptIn(ExperimentalOneConfigUiApi::class)
++
++package org.polyfrost.polyplus.client.gui
++
++import androidx.compose.foundation.Canvas
++import androidx.compose.foundation.layout.size
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.setValue
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.draw.clip
++import androidx.compose.ui.graphics.FilterQuality
++import androidx.compose.ui.graphics.ImageBitmap
++import androidx.compose.ui.graphics.RectangleShape
++import androidx.compose.ui.graphics.Shape
++import androidx.compose.ui.unit.Dp
++import androidx.compose.ui.unit.IntOffset
++import androidx.compose.ui.unit.IntSize
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.delay
++import kotlinx.coroutines.withContext
++import org.polyfrost.compose.backend.asComposeImageBitmap
++import org.polyfrost.compose.render.PolyBitmap
++import org.polyfrost.oneconfig.api.ui.v1.ExperimentalOneConfigUiApi
++import org.polyfrost.oneconfig.api.ui.v1.components.PlayerHead
++import org.polyfrost.polyplus.client.cosmetics.OfflineAppearance
++import org.polyfrost.polyplus.client.utils.ClientPlatform
++import java.awt.image.BufferedImage
++import java.nio.file.Files
++import java.util.UUID
++
++/** Preserves the shared head component, with a live local texture for our offline profile. */
++@Composable
++internal fun AppearancePlayerHead(
++    playerId: UUID,
++    size: Dp,
++    modifier: Modifier = Modifier,
++    name: String? = null,
++    shape: Shape = RectangleShape,
++    contentDescription: String? = null,
++) {
++    var head by remember(playerId) { mutableStateOf<ImageBitmap?>(null) }
++    val local = OfflineAppearance.enabled && playerId == ClientPlatform.localPlayerUuid()
++    LaunchedEffect(playerId, local) {
++        if (!local) { head = null; return@LaunchedEffect }
++        var previous: ByteArray? = null
++        while (true) {
++            withContext(Dispatchers.IO) {
++                val file = OfflineAppearance.directory().resolve("skin.png")
++                val bytes = if (Files.isRegularFile(file)) Files.readAllBytes(file) else null
++                if (bytes == null) { head = null; previous = null }
++                else if (previous?.contentEquals(bytes) != true) {
++                    runCatching {
++                        val image = OfflineAppearance.decode(bytes, false)
++                        val face = BufferedImage(8, 8, BufferedImage.TYPE_INT_ARGB)
++                        face.createGraphics().also { graphics ->
++                            try {
++                                graphics.drawImage(image, 0, 0, 8, 8, 8, 8, 16, 16, null)
++                                graphics.drawImage(image, 0, 0, 8, 8, 40, 8, 48, 16, null)
++                            } finally { graphics.dispose() }
++                        }
++                        PolyBitmap.fromAwt(face).asComposeImageBitmap()
++                    }.onSuccess { head = it; previous = bytes }
++                }
++            }
++            delay(500L)
++        }
++    }
++    val image = head
++    if (image == null) {
++        PlayerHead(playerId, size, modifier, name = name, shape = shape, contentDescription = contentDescription)
++    } else {
++        Canvas(modifier.size(size).clip(shape)) {
++            drawImage(image, IntOffset.Zero, IntSize(8, 8), IntOffset.Zero,
++                IntSize(this.size.width.toInt(), this.size.height.toInt()), filterQuality = FilterQuality.None)
++        }
++    }
++}
+diff --git a/src/main/kotlin/org/polyfrost/polyplus/client/gui/PolyPlusMainMenuScreen.kt b/src/main/kotlin/org/polyfrost/polyplus/client/gui/PolyPlusMainMenuScreen.kt
+index 0da6c7e..fafddba 100644
+--- a/src/main/kotlin/org/polyfrost/polyplus/client/gui/PolyPlusMainMenuScreen.kt
++++ b/src/main/kotlin/org/polyfrost/polyplus/client/gui/PolyPlusMainMenuScreen.kt
+@@ -89,7 +89,7 @@ import org.polyfrost.oneconfig.api.ui.v1.components.NotificationsCenterPanel
+ import org.polyfrost.oneconfig.api.ui.v1.components.Placement
+ import org.polyfrost.oneconfig.api.ui.v1.components.ProvidePopupSounds
+ import org.polyfrost.oneconfig.api.ui.v1.components.Icon as OneConfigIcon
+-import org.polyfrost.oneconfig.api.ui.v1.components.PlayerHead
++import org.polyfrost.polyplus.client.gui.AppearancePlayerHead as PlayerHead
+ import org.polyfrost.oneconfig.api.ui.v1.components.Text
+ import org.polyfrost.oneconfig.api.ui.v1.components.TextButton
+ import org.polyfrost.oneconfig.api.ui.v1.components.TooltipPlacement
+diff --git a/src/main/kotlin/org/polyfrost/polyplus/client/gui/lobbyshell/LobbyChat.kt b/src/main/kotlin/org/polyfrost/polyplus/client/gui/lobbyshell/LobbyChat.kt
+index 26fb298..06c7eba 100644
+--- a/src/main/kotlin/org/polyfrost/polyplus/client/gui/lobbyshell/LobbyChat.kt
++++ b/src/main/kotlin/org/polyfrost/polyplus/client/gui/lobbyshell/LobbyChat.kt
+@@ -5,7 +5,7 @@ package org.polyfrost.polyplus.client.gui.lobbyshell
+ import org.polyfrost.oneconfig.api.ui.v1.theme.OneConfigTheme
+ import org.polyfrost.polyplus.client.gui.SocialDangerText
+ import org.polyfrost.oneconfig.api.ui.v1.a11y.Motion
+-import org.polyfrost.oneconfig.api.ui.v1.components.PlayerHead
++import org.polyfrost.polyplus.client.gui.AppearancePlayerHead as PlayerHead
+ import org.polyfrost.oneconfig.api.ui.v1.ExperimentalOneConfigUiApi
+ import org.polyfrost.oneconfig.api.ui.v1.components.ControlSize
+ import org.polyfrost.oneconfig.api.ui.v1.components.IconButton
+diff --git a/src/main/kotlin/org/polyfrost/polyplus/client/gui/lobbyshell/LobbyChrome.kt b/src/main/kotlin/org/polyfrost/polyplus/client/gui/lobbyshell/LobbyChrome.kt
+index f280033..c6ecf4f 100644
+--- a/src/main/kotlin/org/polyfrost/polyplus/client/gui/lobbyshell/LobbyChrome.kt
++++ b/src/main/kotlin/org/polyfrost/polyplus/client/gui/lobbyshell/LobbyChrome.kt
+@@ -5,7 +5,7 @@ package org.polyfrost.polyplus.client.gui.lobbyshell
+ import org.polyfrost.oneconfig.api.ui.v1.components.rememberHoverState
+ import org.polyfrost.polyplus.client.gui.KitDangerColor
+ import org.polyfrost.oneconfig.api.ui.v1.a11y.Motion
+-import org.polyfrost.oneconfig.api.ui.v1.components.PlayerHead
++import org.polyfrost.polyplus.client.gui.AppearancePlayerHead as PlayerHead
+ import org.polyfrost.oneconfig.api.ui.v1.ExperimentalOneConfigUiApi
+ import androidx.compose.animation.core.FastOutSlowInEasing
+ import androidx.compose.animation.core.animateFloatAsState
 diff --git a/src/main/kotlin/org/polyfrost/polyplus/client/gui/menuwardrobe/MenuWardrobePage.kt b/src/main/kotlin/org/polyfrost/polyplus/client/gui/menuwardrobe/MenuWardrobePage.kt
-index f0a232b..57c63e8 100644
+index f0a232b..41331da 100644
 --- a/src/main/kotlin/org/polyfrost/polyplus/client/gui/menuwardrobe/MenuWardrobePage.kt
 +++ b/src/main/kotlin/org/polyfrost/polyplus/client/gui/menuwardrobe/MenuWardrobePage.kt
-@@ -41,6 +41,7 @@ import kotlinx.coroutines.delay
- import kotlinx.coroutines.launch
- import org.joml.Vector3f
- import org.polyfrost.polyplus.client.PolyPlusClient
-+import org.polyfrost.polyplus.client.cosmetics.OfflineAppearance
+@@ -11,6 +11,7 @@ import androidx.compose.foundation.Canvas
+ import androidx.compose.foundation.background
+ import androidx.compose.foundation.gestures.detectDragGestures
+ import androidx.compose.foundation.layout.Box
++import androidx.compose.foundation.layout.Column
+ import androidx.compose.foundation.layout.BoxWithConstraints
+ import androidx.compose.foundation.layout.fillMaxHeight
+ import androidx.compose.foundation.layout.fillMaxSize
+@@ -44,6 +45,8 @@ import org.polyfrost.polyplus.client.PolyPlusClient
  import org.polyfrost.polyplus.client.cosmetics.CosmeticCatalog
  import org.polyfrost.polyplus.client.cosmetics.CosmeticLoadProgress
  import org.polyfrost.polyplus.client.cosmetics.MojangCape
-@@ -56,6 +57,7 @@ import org.polyfrost.polyplus.client.gui.preview.PlayerPreview
- import org.polyfrost.polyplus.client.gui.preview.PlayerPreviewSource
- import org.polyfrost.polyplus.client.gui.preview.PreviewLights
- import org.polyfrost.polyplus.client.gui.preview.PreviewRotation
-+import org.polyfrost.polyplus.client.gui.wardrobe.OfflineAppearancePanel
- import org.polyfrost.polyplus.client.gui.wardrobe.BACK_VIEW_TYPES
- import org.polyfrost.polyplus.client.gui.wardrobe.CosmeticUiItem
- import org.polyfrost.polyplus.client.gui.wardrobe.CosmeticsLoadingScreen
-@@ -120,6 +122,10 @@ private fun capeNote(state: MojangCapeState): String? = when (state) {
- 
- @Composable
- internal fun WardrobePage(onBack: () -> Unit, onMarketplace: () -> Unit) {
-+    if (OfflineAppearance.enabled) {
-+        OfflineAppearancePanel(onBack)
-+        return
-+    }
-     var consent by rememberOnlineConsent()
-     WardrobeContent(consent, onBack, onMarketplace) { consent = true }
- }
++import org.polyfrost.polyplus.client.cosmetics.OfflineAppearance
++import org.polyfrost.polyplus.client.gui.wardrobe.LocalCapeControls
+ import org.polyfrost.polyplus.client.cosmetics.MojangCapeService
+ import org.polyfrost.polyplus.client.cosmetics.MojangCapeState
+ import org.polyfrost.polyplus.client.cosmetics.outfits.OutfitLibrary
+@@ -161,7 +164,7 @@ private fun WardrobeContent(online: Boolean, onBack: () -> Unit, onMarketplace:
+             WardrobeView.Outfits -> OutfitLibrary.refreshIfNeeded(reload = true)
+             WardrobeView.Skins -> {
+                 SkinLibrary.refreshIfNeeded()
+-                OutfitLibrary.refreshIfNeeded()
++                if (!OfflineAppearance.enabled) OutfitLibrary.refreshIfNeeded()
+             }
+             WardrobeView.Wheel -> if (store.byType.isEmpty()) store.load()
+             else -> Unit
+@@ -237,7 +240,7 @@ private fun WardrobeContent(online: Boolean, onBack: () -> Unit, onMarketplace:
+         retryLoad()
+         PolyPlusClient.SCOPE.launch { MojangCapeService.refresh() }
+         if (online && view == WardrobeView.Outfits) PolyPlusClient.SCOPE.launch { OutfitLibrary.refresh() }
+-        if (online && view == WardrobeView.Skins) {
++        if ((online || OfflineAppearance.enabled) && view == WardrobeView.Skins) {
+             PolyPlusClient.SCOPE.launch {
+                 SkinLibrary.refresh()
+                 OutfitLibrary.refresh()
+@@ -449,9 +452,12 @@ private fun WardrobeContent(online: Boolean, onBack: () -> Unit, onMarketplace:
+                             { Box(Modifier.fillMaxWidth().height(LoadingHeight)) { CosmeticsLoadingScreen(loadState, ::retryLoad) } }
+                         }
+                     },
+-                    libraries = online,
++                    libraries = online || OfflineAppearance.enabled,
+                 )
+-                is DrawerPage.Slot -> DrawerSlotPage(pickerModel(page.type), wearing(page.type))
++                is DrawerPage.Slot -> Column {
++                    if (page.type == CosmeticType.Cape && OfflineAppearance.enabled) LocalCapeControls()
++                    DrawerSlotPage(pickerModel(page.type), wearing(page.type))
++                }
+                 is DrawerPage.Library -> LibraryPage(
+                     view = page.view,
+                     selection = selection,
+diff --git a/src/main/kotlin/org/polyfrost/polyplus/client/gui/pausescreen/PauseQuickDock.kt b/src/main/kotlin/org/polyfrost/polyplus/client/gui/pausescreen/PauseQuickDock.kt
+index 970955c..300668d 100644
+--- a/src/main/kotlin/org/polyfrost/polyplus/client/gui/pausescreen/PauseQuickDock.kt
++++ b/src/main/kotlin/org/polyfrost/polyplus/client/gui/pausescreen/PauseQuickDock.kt
+@@ -6,7 +6,7 @@ import org.polyfrost.oneconfig.api.ui.v1.a11y.Motion
+ import org.polyfrost.oneconfig.api.ui.v1.a11y.notFocusable
+ import org.polyfrost.polyplus.client.gui.SocialDangerText
+ import org.polyfrost.polyplus.client.gui.lobbyshell.headShape
+-import org.polyfrost.oneconfig.api.ui.v1.components.PlayerHead
++import org.polyfrost.polyplus.client.gui.AppearancePlayerHead as PlayerHead
+ import androidx.compose.foundation.background
+ import androidx.compose.foundation.hoverable
+ import androidx.compose.foundation.layout.Arrangement
+diff --git a/src/main/kotlin/org/polyfrost/polyplus/client/gui/pausescreen/PauseStepBack.kt b/src/main/kotlin/org/polyfrost/polyplus/client/gui/pausescreen/PauseStepBack.kt
+index c7f7d5a..75c6fdf 100644
+--- a/src/main/kotlin/org/polyfrost/polyplus/client/gui/pausescreen/PauseStepBack.kt
++++ b/src/main/kotlin/org/polyfrost/polyplus/client/gui/pausescreen/PauseStepBack.kt
+@@ -6,7 +6,7 @@ import org.polyfrost.polyplus.client.gui.lobbyshell.headShape
+ import org.polyfrost.polyplus.client.gui.lobbyshell.centerVerticallyExact
+ import androidx.compose.foundation.layout.fillMaxHeight
+ import org.polyfrost.oneconfig.api.ui.v1.components.ScrollContainer
+-import org.polyfrost.oneconfig.api.ui.v1.components.PlayerHead
++import org.polyfrost.polyplus.client.gui.AppearancePlayerHead as PlayerHead
+ import androidx.compose.foundation.background
+ import androidx.compose.foundation.layout.Arrangement
+ import androidx.compose.foundation.layout.Box
 diff --git a/src/main/kotlin/org/polyfrost/polyplus/client/gui/preview/PlayerPreviewRenderer.kt b/src/main/kotlin/org/polyfrost/polyplus/client/gui/preview/PlayerPreviewRenderer.kt
 index d1ce0a6..6b81f70 100644
 --- a/src/main/kotlin/org/polyfrost/polyplus/client/gui/preview/PlayerPreviewRenderer.kt
@@ -308,26 +691,34 @@ index d1ce0a6..6b81f70 100644
                  ?: if (!MojangCapeService.overridesLocalCape(ClientPlatform.localPlayerUuid())) playerCape(mc)
                  else MojangCapeService.localCapeTexture()
                      ?: if (MojangCapeService.localCapeHidden()) null else playerCape(mc)
+diff --git a/src/main/kotlin/org/polyfrost/polyplus/client/gui/screens/ShellFrame.kt b/src/main/kotlin/org/polyfrost/polyplus/client/gui/screens/ShellFrame.kt
+index 2118379..606b12a 100644
+--- a/src/main/kotlin/org/polyfrost/polyplus/client/gui/screens/ShellFrame.kt
++++ b/src/main/kotlin/org/polyfrost/polyplus/client/gui/screens/ShellFrame.kt
+@@ -47,7 +47,7 @@ import org.polyfrost.oneconfig.api.ui.v1.a11y.notFocusable
+ import org.polyfrost.oneconfig.api.ui.v1.components.ControlSize
+ import org.polyfrost.oneconfig.api.ui.v1.components.ControlStyle
+ import org.polyfrost.oneconfig.api.ui.v1.components.IconButton
+-import org.polyfrost.oneconfig.api.ui.v1.components.PlayerHead
++import org.polyfrost.polyplus.client.gui.AppearancePlayerHead as PlayerHead
+ import org.polyfrost.oneconfig.api.ui.v1.components.Text
+ import org.polyfrost.oneconfig.api.ui.v1.components.TextButton
+ import org.polyfrost.oneconfig.api.ui.v1.components.TooltipPlacement
 diff --git a/src/main/kotlin/org/polyfrost/polyplus/client/gui/wardrobe/OfflineAppearancePanel.kt b/src/main/kotlin/org/polyfrost/polyplus/client/gui/wardrobe/OfflineAppearancePanel.kt
 new file mode 100644
-index 0000000..4a9a3c9
+index 0000000..aa6d37b
 --- /dev/null
 +++ b/src/main/kotlin/org/polyfrost/polyplus/client/gui/wardrobe/OfflineAppearancePanel.kt
-@@ -0,0 +1,82 @@
+@@ -0,0 +1,53 @@
 +@file:OptIn(ExperimentalOneConfigUiApi::class)
 +
 +package org.polyfrost.polyplus.client.gui.wardrobe
 +
-+import androidx.compose.foundation.rememberScrollState
-+import androidx.compose.foundation.verticalScroll
 +import androidx.compose.foundation.layout.Arrangement
 +import androidx.compose.foundation.layout.Column
-+import androidx.compose.foundation.layout.fillMaxSize
 +import androidx.compose.foundation.layout.fillMaxWidth
-+import androidx.compose.foundation.layout.height
 +import androidx.compose.foundation.layout.padding
 +import androidx.compose.runtime.Composable
-+import androidx.compose.runtime.LaunchedEffect
 +import androidx.compose.runtime.getValue
 +import androidx.compose.runtime.mutableStateOf
 +import androidx.compose.runtime.remember
@@ -342,60 +733,81 @@ index 0000000..4a9a3c9
 +import org.polyfrost.oneconfig.api.ui.v1.api.TinyFdApi
 +import org.polyfrost.oneconfig.api.ui.v1.components.Text
 +import org.polyfrost.oneconfig.api.ui.v1.components.TextButton
-+import org.polyfrost.oneconfig.api.ui.v1.components.TextField
 +import org.polyfrost.polyplus.client.cosmetics.OfflineAppearance
-+import org.polyfrost.polyplus.client.gui.preview.PlayerPreview
-+import org.polyfrost.polyplus.client.gui.preview.PlayerPreviewSource
 +
-+/** The existing wardrobe opens this page for local offline profiles. */
++/** PNG controls displayed inside the existing cape drawer. */
 +@Composable
-+internal fun OfflineAppearancePanel(onBack: (() -> Unit)? = null) {
++internal fun LocalCapeControls() {
 +    val scope = rememberCoroutineScope()
-+    var name by remember { mutableStateOf("") }
-+    var slim by remember { mutableStateOf(false) }
 +    var busy by remember { mutableStateOf(false) }
-+    var message by remember { mutableStateOf("Changes are local to this client. Name lookup needs internet.") }
-+    LaunchedEffect(Unit) { slim = withContext(Dispatchers.IO) { runCatching { OfflineAppearance.slimModel() }.getOrDefault(false) } }
-+
-+    fun action(work: suspend () -> Unit) {
++    var message by remember { mutableStateOf("Local cape: 64 x 32 PNG") }
++    fun action(remove: Boolean) {
 +        if (busy) return
 +        busy = true
 +        scope.launch {
 +            message = try {
-+                withContext(Dispatchers.IO) { work() }
-+                slim = withContext(Dispatchers.IO) { OfflineAppearance.slimModel() }
-+                "Appearance saved. It applies in-game automatically."
-+            } catch (error: Exception) { error.message ?: "Could not update appearance." }
++                withContext(Dispatchers.IO) {
++                    if (remove) OfflineAppearance.clear(true) else {
++                        val file = TinyFdApi.getInstance().openFileSelector("Choose a cape", null, arrayOf("*.png"), "PNG images")
++                        if (file != null) OfflineAppearance.importFile(file, true, false)
++                    }
++                }
++                "Local cape updated."
++            } catch (error: Exception) { error.message ?: "Could not update cape." }
 +            finally { busy = false }
 +        }
 +    }
-+
-+    fun choose(cape: Boolean) = action {
-+        val file = TinyFdApi.getInstance().openFileSelector(
-+            if (cape) "Choose a cape" else "Choose a skin", null, arrayOf("*.png"), "PNG images",
-+        ) ?: return@action
-+        OfflineAppearance.importFile(file, cape, slim)
-+    }
-+
-+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-+        onBack?.let { TextButton("Back", { it() }) }
-+        Text("Local wardrobe")
-+        PlayerPreview(Modifier.fillMaxWidth().height(200.dp), source = PlayerPreviewSource.LocalLive, autoSpin = false, live = true)
-+        TextButton("Import skin PNG", { choose(false) })
-+        TextButton(if (slim) "Model: slim (click to change)" else "Model: classic (click to change)", {
-+            if (!busy) {
-+                val next = !slim
-+                action { OfflineAppearance.setSlim(next) }
-+            }
-+        })
-+        TextButton("Import cape PNG (64 x 32)", { choose(true) })
-+        TextField(value = name, onValueChange = { name = it }, placeholder = "Minecraft username", modifier = Modifier.fillMaxWidth())
-+        TextButton("Use skin by username", { action { OfflineAppearance.fromUsername(name) } })
-+        TextButton("Remove skin", { action { OfflineAppearance.clear(false) } })
-+        TextButton("Remove cape", { action { OfflineAppearance.clear(true) } })
++    Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
++        TextButton("Import cape PNG", { action(false) })
++        TextButton("Remove local cape", { action(true) })
 +        Text(if (busy) "Working..." else message)
 +    }
 +}
+diff --git a/src/main/kotlin/org/polyfrost/polyplus/client/gui/wardrobe/WardrobeShell.kt b/src/main/kotlin/org/polyfrost/polyplus/client/gui/wardrobe/WardrobeShell.kt
+index b244784..6a53549 100644
+--- a/src/main/kotlin/org/polyfrost/polyplus/client/gui/wardrobe/WardrobeShell.kt
++++ b/src/main/kotlin/org/polyfrost/polyplus/client/gui/wardrobe/WardrobeShell.kt
+@@ -31,6 +31,7 @@ import org.polyfrost.oneconfig.api.ui.v1.ExperimentalOneConfigUiApi
+ import org.polyfrost.oneconfig.api.ui.v1.a11y.Motion
+ import org.polyfrost.oneconfig.api.ui.v1.page.currentPageSearchQuery
+ import org.polyfrost.polyplus.client.PolyPlusClient
++import org.polyfrost.polyplus.client.cosmetics.OfflineAppearance
+ import org.polyfrost.polyplus.client.cosmetics.MojangCapeService
+ import org.polyfrost.polyplus.client.cosmetics.MojangCapeState
+ import org.polyfrost.polyplus.client.cosmetics.outfits.OutfitLibrary
+@@ -75,7 +76,7 @@ internal fun WardrobeShell(
+     }
+     LaunchedEffect(Unit) { MojangCapeService.refreshIfNeeded() }
+ 
+-    val sections = if (polyPlusAvailable) WardrobeSection.entries else listOf(WardrobeSection.Cosmetics)
++    val sections = if (polyPlusAvailable) WardrobeSection.entries else if (OfflineAppearance.enabled) listOf(WardrobeSection.Skins, WardrobeSection.Cosmetics) else listOf(WardrobeSection.Cosmetics)
+     var section by remember { mutableStateOf(sections.first()) }
+     val query = currentPageSearchQuery
+     var sort by remember { mutableStateOf(WardrobeSort.Popular) }
+@@ -97,12 +98,12 @@ internal fun WardrobeShell(
+         if (section == WardrobeSection.Emotes && polyPlusAvailable) emoteKeybindWarning() else null
+     }
+     LaunchedEffect(section) {
+-        if (!polyPlusAvailable) return@LaunchedEffect
++        if (!polyPlusAvailable && !OfflineAppearance.enabled) return@LaunchedEffect
+         when (section) {
+             WardrobeSection.Outfits -> OutfitLibrary.refreshIfNeeded(reload = true)
+             WardrobeSection.Skins -> {
+                 SkinLibrary.refreshIfNeeded()
+-                OutfitLibrary.refreshIfNeeded()
++                if (!OfflineAppearance.enabled) OutfitLibrary.refreshIfNeeded()
+             }
+             else -> Unit
+         }
+@@ -210,7 +211,7 @@ internal fun WardrobeShell(
+                     if (polyPlusAvailable && section == WardrobeSection.Outfits) {
+                         scope.launch { OutfitLibrary.refresh() }
+                     }
+-                    if (polyPlusAvailable && section == WardrobeSection.Skins) {
++                    if ((polyPlusAvailable || OfflineAppearance.enabled) && section == WardrobeSection.Skins) {
+                         scope.launch {
+                             SkinLibrary.refresh()
+                             OutfitLibrary.refresh()
 diff --git a/src/test/kotlin/org/polyfrost/polyplus/test/OfflineAppearanceTest.kt b/src/test/kotlin/org/polyfrost/polyplus/test/OfflineAppearanceTest.kt
 new file mode 100644
 index 0000000..daa3b21
