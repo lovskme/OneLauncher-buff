@@ -1,0 +1,90 @@
+name: Offline profile Windows installer (unsigned)
+
+on:
+  push:
+    branches: [offline-profiles]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: offline-windows-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_PROFILE_RELEASE_LTO: thin
+  CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 16
+
+jobs:
+  installer:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Setup Rust
+        uses: ./.github/actions/setup-rust
+        with:
+          save-cache: true
+          cache-namespace: offline-windows-cache
+
+      - name: Test authentication and offline profiles
+        run: cargo test --locked -p oneclient_auth
+
+      - name: Build launcher
+        run: cargo build --locked --release --bin oneclient_app
+
+      - name: Stage app-local Visual C++ runtime
+        run: python distribution/windows/bundle-crt.py
+
+      - name: Verify runtime signatures
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dlls = @(Get-ChildItem 'target/crt/*.dll')
+          if ($dlls.Count -eq 0) { throw 'No Visual C++ runtime DLLs were staged.' }
+          foreach ($dll in $dlls) {
+            $sig = Get-AuthenticodeSignature $dll.FullName
+            if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation') {
+              throw "Invalid Microsoft signature on $($dll.Name)."
+            }
+          }
+
+      - name: Install cargo-packager
+        uses: ./.github/actions/install-cargo-tool
+        with:
+          tool: cargo-packager
+          version: 0.11.8
+
+      - name: Package unsigned Windows installer
+        env:
+          CI: 'true'
+        run: cargo packager --release --formats nsis --verbose
+
+      - name: Verify installer layout
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installers = @(Get-ChildItem 'target/release/*-setup.exe')
+          if ($installers.Count -ne 1) { throw 'Expected exactly one Windows installer.' }
+          $dest = Join-Path $env:RUNNER_TEMP 'oneclient-offline-smoke'
+          $process = Start-Process -FilePath $installers[0].FullName -ArgumentList '/S', "/D=$dest" -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Installer exited with $($process.ExitCode)." }
+          if (-not (Test-Path (Join-Path $dest 'oneclient_app.exe'))) {
+            throw 'The installed launcher executable is missing.'
+          }
+          foreach ($dll in @(Get-ChildItem 'target/crt/*.dll')) {
+            if (-not (Test-Path (Join-Path $dest $dll.Name))) {
+              throw "Installed runtime DLL $($dll.Name) is missing."
+            }
+          }
+          Get-FileHash $installers[0].FullName -Algorithm SHA256
+
+      - name: Upload installer
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: oneclient-offline-windows-x64-installer
+          path: target/release/*-setup.exe
+          if-no-files-found: error
+          retention-days: 14

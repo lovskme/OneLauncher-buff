@@ -27,14 +27,16 @@ fn offline_uuid_matches_vanilla_algorithm() {
     assert_ne!(id, offline_uuid("Steve"));
 }
 
-#[tokio::test]
-async fn offline_account_blocked_without_microsoft() {
-    isolate_launcher_dir();
-
+#[test]
+fn offline_account_is_default_without_microsoft() {
     let mut store = CredentialsStore::default();
-    let err = store.add_offline_account("Steve".into()).unwrap_err();
+    let account = store.add_offline_account("Steve".into()).unwrap();
 
-    assert!(err.to_string().contains("Microsoft"));
+    assert_eq!(account.kind, AccountKind::Offline);
+    assert_eq!(store.default_user, Some(account.id));
+    assert!(account.access_token.is_empty());
+    assert!(account.refresh_token.is_empty());
+    assert!(!store.has_microsoft_account());
 }
 
 #[tokio::test]
@@ -51,7 +53,7 @@ async fn offline_account_allowed_when_microsoft_exists() {
 }
 
 #[tokio::test]
-async fn default_offline_fails_when_last_microsoft_removed() {
+async fn default_offline_survives_when_last_microsoft_removed() {
     isolate_launcher_dir();
 
     let mut store = CredentialsStore::default();
@@ -63,8 +65,25 @@ async fn default_offline_fails_when_last_microsoft_removed() {
     store.default_user = Some(offline.id);
     store.users.remove(&msa_id);
 
-    let err = store.default_account().await.unwrap_err();
-    assert!(err.to_string().contains("Microsoft"));
+    let account = store.default_account().await.unwrap().unwrap();
+    assert_eq!(account.id, offline.id);
+    assert_eq!(account.kind, AccountKind::Offline);
+}
+
+#[test]
+fn offline_accounts_still_validate_names_and_reject_duplicates() {
+    let mut store = CredentialsStore::default();
+    for name in ["", "ab", "has spaces", "abcdefghijklmnopq", "Steve/../"] {
+        assert!(store.add_offline_account(name.into()).is_err());
+    }
+    assert!(store.users.is_empty());
+    assert!(store.default_user.is_none());
+
+    let first = store.add_offline_account("Steve".into()).unwrap();
+    assert!(store.add_offline_account("steve".into()).is_err());
+    store.add_offline_account("Alex".into()).unwrap();
+    assert_eq!(store.default_user, Some(first.id));
+    assert_eq!(store.users.len(), 2);
 }
 
 #[test]

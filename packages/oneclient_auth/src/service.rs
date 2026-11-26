@@ -387,10 +387,6 @@ impl AuthService {
             Err(err) => return Err(err),
         };
 
-        if account.is_offline() && !self.has_microsoft_account().await {
-            return Err(AuthError::OfflineRequiresMicrosoft);
-        }
-
         Ok(account)
     }
 
@@ -413,6 +409,25 @@ mod tests {
     fn service(events: EventBus) -> AuthService {
         let net = RequestClient::new(NetConfig::default()).expect("net client");
         AuthService::with_store(CredentialsStore::default(), net, events)
+    }
+
+    #[tokio::test]
+    async fn an_offline_profile_launches_without_a_microsoft_account() {
+        let mut store = CredentialsStore::default();
+        let offline = store.add_offline_account("Steve".into()).unwrap();
+        let (events, _rx) = EventBus::channel();
+        let net = RequestClient::new(NetConfig::default()).expect("net client");
+        let service = AuthService::with_store(store, net, events);
+
+        let account = service
+            .default_account_for_launch()
+            .await
+            .expect("offline launch must not require Microsoft authentication")
+            .expect("the first offline profile is the default");
+        assert_eq!(account.id, offline.id);
+        assert!(account.is_offline());
+        assert!(account.access_token.is_empty());
+        assert!(account.refresh_token.is_empty());
     }
 
     /// Registers a login the way `begin_microsoft_login` does minus the device

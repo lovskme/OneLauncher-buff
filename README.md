@@ -76,6 +76,19 @@ cargo build -p oneclient_app --release
 ```
 
 
+### Offline profiles
+
+During account setup, enter a local username and select **Add offline** to
+continue without Microsoft sign-in. You can also create offline profiles under
+**Settings → Accounts → Add offline**. Usernames must contain 3–16 ASCII letters,
+digits, or underscores. The first profile becomes the default account.
+
+Offline profiles can play singleplayer and join servers that allow offline
+players. Servers requiring authentication and Microsoft services still require
+Microsoft sign-in. Installing a game version, Java, assets, or mods can require
+an internet connection; create and prepare the instance before playing without
+a connection.
+
 ### Packaging / Releasing
 
 Installers are produced with [**cargo-packager**](https://github.com/crabnebula-dev/cargo-packager)

@@ -1,8 +1,11 @@
 use freya::prelude::*;
+use freya::query::MutationStateData;
 use oneclient_auth::MinecraftAccount;
 
-use crate::components::{Avatar, Button, Icon, IconType, use_microsoft_login};
-use crate::hooks::{try_default_account, use_current_account};
+use crate::components::{Avatar, Button, Icon, IconType, TextInput, use_microsoft_login};
+use crate::hooks::{
+    AddOfflineAccountKeys, try_default_account, use_add_offline_account, use_current_account,
+};
 use crate::i18n::t;
 use crate::routes::Route;
 use crate::theme::{colors, text_size};
@@ -17,6 +20,15 @@ impl Component for OnboardingAccount {
     fn render(&self) -> impl IntoElement {
         let account_query = use_current_account();
         let msa = use_microsoft_login();
+        let add_offline = use_add_offline_account();
+        let username = use_state(String::new);
+
+        let (offline_pending, offline_error) = match &*add_offline.read().state() {
+            MutationStateData::Loading { .. } => (true, None),
+            MutationStateData::Settled { res: Err(err), .. } => (false, Some(err.to_string())),
+            _ => (false, None),
+        };
+        let valid_username = oneclient_auth::validate_offline_username(username.read().trim()).is_ok();
 
         let account = try_default_account(&account_query);
         let has_account = account.is_some();
@@ -37,6 +49,46 @@ impl Component for OnboardingAccount {
                         .into_element()
                 }
             })
+            .maybe_child((!has_account).then(|| {
+                rect()
+                    .vertical()
+                    .width(Size::fill())
+                    .spacing(12.)
+                    .child(
+                        label()
+                            .text(t("oneclient.settings.accounts.offline.title"))
+                            .font_size(text_size(16.))
+                            .color(colors::fg_primary()),
+                    )
+                    .child(TextInput::new(username).placeholder(t(
+                        "oneclient.settings.accounts.offline.username_placeholder",
+                    )))
+                    .child(
+                        label()
+                            .text(t("oneclient.settings.accounts.offline.hint"))
+                            .font_size(text_size(12.))
+                            .color(colors::fg_secondary()),
+                    )
+                    .child(
+                        Button::new()
+                            .secondary()
+                            .enabled(valid_username && !offline_pending && !msa.pending)
+                            .on_press(move |_| {
+                                add_offline.mutate(AddOfflineAccountKeys {
+                                    username: username.peek().trim().to_string(),
+                                });
+                            })
+                            .text(t("oneclient.settings.accounts.add_offline")),
+                    )
+                    .maybe_child(offline_error.map(|message| {
+                        label()
+                            .text(message)
+                            .font_size(text_size(12.))
+                            .color(colors::danger())
+                            .into_element()
+                    }))
+                    .into_element()
+            }))
             .into_element();
 
         let page = onboarding_page(
