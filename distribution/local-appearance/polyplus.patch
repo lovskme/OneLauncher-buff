@@ -667,7 +667,7 @@ index 7c816a8..c11657b 100644
                  }
              }
 diff --git a/src/main/kotlin/org/polyfrost/polyplus/client/gui/menuwardrobe/MenuWardrobePage.kt b/src/main/kotlin/org/polyfrost/polyplus/client/gui/menuwardrobe/MenuWardrobePage.kt
-index f0a232b..34483a9 100644
+index f0a232b..3591d14 100644
 --- a/src/main/kotlin/org/polyfrost/polyplus/client/gui/menuwardrobe/MenuWardrobePage.kt
 +++ b/src/main/kotlin/org/polyfrost/polyplus/client/gui/menuwardrobe/MenuWardrobePage.kt
 @@ -11,6 +11,7 @@ import androidx.compose.foundation.Canvas
@@ -678,17 +678,18 @@ index f0a232b..34483a9 100644
  import androidx.compose.foundation.layout.BoxWithConstraints
  import androidx.compose.foundation.layout.fillMaxHeight
  import androidx.compose.foundation.layout.fillMaxSize
-@@ -44,6 +45,9 @@ import org.polyfrost.polyplus.client.PolyPlusClient
+@@ -44,6 +45,10 @@ import org.polyfrost.polyplus.client.PolyPlusClient
  import org.polyfrost.polyplus.client.cosmetics.CosmeticCatalog
  import org.polyfrost.polyplus.client.cosmetics.CosmeticLoadProgress
  import org.polyfrost.polyplus.client.cosmetics.MojangCape
++import org.polyfrost.oneconfig.api.ui.v1.components.Text
 +import org.polyfrost.oneconfig.api.ui.v1.theme.OneConfigTheme
 +import org.polyfrost.polyplus.client.cosmetics.OfflineAppearance
 +import org.polyfrost.polyplus.client.gui.wardrobe.LocalCapeControls
  import org.polyfrost.polyplus.client.cosmetics.MojangCapeService
  import org.polyfrost.polyplus.client.cosmetics.MojangCapeState
  import org.polyfrost.polyplus.client.cosmetics.outfits.OutfitLibrary
-@@ -144,8 +148,8 @@ private fun WardrobeContent(online: Boolean, onBack: () -> Unit, onMarketplace:
+@@ -144,8 +149,8 @@ private fun WardrobeContent(online: Boolean, onBack: () -> Unit, onMarketplace:
      val rotation = remember { PreviewRotation(FRONT_YAW) }
  
      LaunchedEffect(online) {
@@ -699,7 +700,7 @@ index f0a232b..34483a9 100644
          while (true) {
              loadState = CosmeticLoadProgress.snapshot()
              liveScene = LobbyScene.showing()
-@@ -161,7 +165,7 @@ private fun WardrobeContent(online: Boolean, onBack: () -> Unit, onMarketplace:
+@@ -161,7 +166,7 @@ private fun WardrobeContent(online: Boolean, onBack: () -> Unit, onMarketplace:
              WardrobeView.Outfits -> OutfitLibrary.refreshIfNeeded(reload = true)
              WardrobeView.Skins -> {
                  SkinLibrary.refreshIfNeeded()
@@ -708,7 +709,7 @@ index f0a232b..34483a9 100644
              }
              WardrobeView.Wheel -> if (store.byType.isEmpty()) store.load()
              else -> Unit
-@@ -237,10 +241,10 @@ private fun WardrobeContent(online: Boolean, onBack: () -> Unit, onMarketplace:
+@@ -237,10 +242,10 @@ private fun WardrobeContent(online: Boolean, onBack: () -> Unit, onMarketplace:
          retryLoad()
          PolyPlusClient.SCOPE.launch { MojangCapeService.refresh() }
          if (online && view == WardrobeView.Outfits) PolyPlusClient.SCOPE.launch { OutfitLibrary.refresh() }
@@ -721,7 +722,7 @@ index f0a232b..34483a9 100644
              }
          }
          refreshKey++
-@@ -303,7 +307,7 @@ private fun WardrobeContent(online: Boolean, onBack: () -> Unit, onMarketplace:
+@@ -303,7 +308,7 @@ private fun WardrobeContent(online: Boolean, onBack: () -> Unit, onMarketplace:
                  },
              ).takeIf { type == CosmeticType.Aura && entries.isNotEmpty() },
              forceToggle = online && type == CosmeticType.Cape,
@@ -730,7 +731,7 @@ index f0a232b..34483a9 100644
              status = status,
              picksToWheel = wheelPicking,
          )
-@@ -430,6 +434,7 @@ private fun WardrobeContent(online: Boolean, onBack: () -> Unit, onMarketplace:
+@@ -430,6 +435,7 @@ private fun WardrobeContent(online: Boolean, onBack: () -> Unit, onMarketplace:
                      drawer,
                      top = {
                          when {
@@ -738,7 +739,7 @@ index f0a232b..34483a9 100644
                              online -> OutfitPanel(onStatus = { status = it }, modifier = Modifier.fillMaxWidth().height(OutfitRowHeight))
                              consentCard -> ConsentStep(
                                  "Cosmetics and outfits need online services.",
-@@ -449,9 +454,13 @@ private fun WardrobeContent(online: Boolean, onBack: () -> Unit, onMarketplace:
+@@ -449,9 +455,13 @@ private fun WardrobeContent(online: Boolean, onBack: () -> Unit, onMarketplace:
                              { Box(Modifier.fillMaxWidth().height(LoadingHeight)) { CosmeticsLoadingScreen(loadState, ::retryLoad) } }
                          }
                      },

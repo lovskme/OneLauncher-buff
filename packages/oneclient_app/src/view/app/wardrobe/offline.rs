@@ -70,7 +70,7 @@ impl Component for OfflineWardrobe {
                 busy.set(false);
             });
         });
-        let current = appearance.read().clone();
+        let current = crate::hooks::use_local_appearance(&account.to_string());
         let enabled = !*busy.read();
         let lookup_name = name.read().trim().to_string();
         let valid_name = !lookup_name.is_empty() && lookup_name.len() <= 16

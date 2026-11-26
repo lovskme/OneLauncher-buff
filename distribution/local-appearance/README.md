@@ -21,3 +21,22 @@ launcher replaces the materialized PolyPlus JAR with this component using an
 atomic replacement, leaving its shared content-cache source intact.
 Install the OneClient bundle first; vanilla/Forge instances do not use this
 component. Online Microsoft profiles keep the upstream wardrobe behavior.
+
+The in-game **Your skins** library uses its existing PNG, URL, username, wear,
+rename, favorite, model and delete controls for offline profiles. Its metadata
+is stored in `library.json` and its PNGs in `library/` beside the selected
+textures. Importing a skin in the launcher also adds it to this local library
+on refresh. Cape PNG controls are embedded in the existing cape drawer.
+The launcher and in-game local head widgets read the selected local texture.
+
+The installer resolves the final `-Dfabric.modsFolder` JVM argument before
+replacing the component, including paths with spaces and user overrides.
+Legacy layouts inspect only this cluster's subdirectory or `1.8.9`, avoiding
+other instances. A missing component is a launch error instead of a silent
+success. Launcher logs record the replacement path. Game logs include
+`polyplus/local-appearance` when the component initializes.
+
+Validation covers PNG decoding, local index persistence and damaged metadata,
+final JVM mods-folder resolution, missing components and the nested legacy
+mods layout. A successful installer build does not constitute an interactive
+Minecraft gameplay test.
