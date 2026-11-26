@@ -1,0 +1,24 @@
+name: Check offline launcher compilation
+
+on:
+  push:
+    branches: [offline-check]
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: ./.github/actions/setup-rust
+        with:
+          save-cache: true
+          cache-namespace: offline-windows-cache
+      - name: Prepare include for compile-only validation
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force packages/oneclient_core/assets | Out-Null
+          [IO.File]::WriteAllBytes("$pwd/packages/oneclient_core/assets/local-appearance-1.8.9.jar", [byte[]]@(0))
+      - name: Check launcher types without producing a distributable
+        run: cargo check --locked --release --bin oneclient_app --features local-appearance
