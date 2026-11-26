@@ -46,10 +46,10 @@ index f544e4e..8ee9a52 100644
          return textureId.startsWith(DEFAULT_SKIN_PREFIX) || textureId in current.replaceablePaths
 diff --git a/src/main/kotlin/org/polyfrost/polyplus/client/cosmetics/OfflineAppearance.kt b/src/main/kotlin/org/polyfrost/polyplus/client/cosmetics/OfflineAppearance.kt
 new file mode 100644
-index 0000000..029d172
+index 0000000..26923da
 --- /dev/null
 +++ b/src/main/kotlin/org/polyfrost/polyplus/client/cosmetics/OfflineAppearance.kt
-@@ -0,0 +1,143 @@
+@@ -0,0 +1,144 @@
 +package org.polyfrost.polyplus.client.cosmetics
 +
 +import kotlinx.coroutines.Dispatchers
@@ -61,6 +61,7 @@ index 0000000..029d172
 +import org.polyfrost.polyplus.client.cosmetics.outfits.SkinModel
 +import org.polyfrost.polyplus.client.gui.preview.PreviewSkin
 +import org.polyfrost.polyplus.client.utils.ClientPlatform
++import java.awt.image.BufferedImage
 +import java.io.ByteArrayInputStream
 +import java.nio.file.AtomicMoveNotSupportedException
 +import java.nio.file.Files
@@ -132,7 +133,7 @@ index 0000000..029d172
 +        return Files.readAllBytes(file).also { require(it.size <= LIMIT) { "PNG file is too large." } }
 +    }
 +
-+    internal fun decode(bytes: ByteArray, cape: Boolean): java.awt.image.BufferedImage {
++    internal fun decode(bytes: ByteArray, cape: Boolean): BufferedImage {
 +        require(bytes.size <= LIMIT) { "PNG file is too large." }
 +        val size = ImageIO.createImageInputStream(ByteArrayInputStream(bytes)).use { input ->
 +            val reader = ImageIO.getImageReaders(input).asSequence().firstOrNull() ?: error("Invalid PNG.")
@@ -216,56 +217,104 @@ index f4f9358..eb703c7 100644
          image.createGraphics().apply { drawImage(source, 0, 0, null) }.dispose()
          opaque(image, 0, 0, 32, 16)
 diff --git a/src/main/kotlin/org/polyfrost/polyplus/client/gui/PolyPlusCosmeticsScreen.kt b/src/main/kotlin/org/polyfrost/polyplus/client/gui/PolyPlusCosmeticsScreen.kt
-index b2a05fe..2ac39da 100644
+index b2a05fe..84cd351 100644
 --- a/src/main/kotlin/org/polyfrost/polyplus/client/gui/PolyPlusCosmeticsScreen.kt
 +++ b/src/main/kotlin/org/polyfrost/polyplus/client/gui/PolyPlusCosmeticsScreen.kt
-@@ -36,6 +36,10 @@ import org.polyfrost.polyplus.client.utils.ClientPlatform
+@@ -13,6 +13,7 @@ import kotlinx.coroutines.delay
+ import kotlinx.coroutines.launch
+ import org.polyfrost.polyplus.client.PolyPlusClient
+ import org.polyfrost.polyplus.client.cosmetics.BillingService
++import org.polyfrost.polyplus.client.cosmetics.OfflineAppearance
+ import org.polyfrost.polyplus.client.cosmetics.CosmeticCatalog
+ import org.polyfrost.polyplus.client.cosmetics.CosmeticLoadProgress
+ import org.polyfrost.polyplus.client.cosmetics.CosmeticStore
+@@ -21,6 +22,7 @@ import org.polyfrost.polyplus.client.gui.wardrobe.CartEntry
+ import org.polyfrost.polyplus.client.gui.wardrobe.CosmeticsLoadingScreen
+ import org.polyfrost.polyplus.client.gui.lobbyshell.rememberOnlineConsent
+ import org.polyfrost.polyplus.client.gui.wardrobe.MinecraftCapesOnlyScreen
++import org.polyfrost.polyplus.client.gui.wardrobe.OfflineAppearancePanel
+ import org.polyfrost.polyplus.client.gui.wardrobe.WardrobeShell
+ import org.polyfrost.polyplus.client.gui.wardrobe.cartName
+ import org.polyfrost.polyplus.client.gui.wardrobe.checkoutFailureMessage
+@@ -36,6 +38,10 @@ import org.polyfrost.polyplus.client.utils.ClientPlatform
  
  @Composable
  internal fun PolyPlusCosmeticsScreen() {
-+    if (org.polyfrost.polyplus.client.cosmetics.OfflineAppearance.enabled) {
-+        org.polyfrost.polyplus.client.gui.wardrobe.OfflineAppearancePanel()
++    if (OfflineAppearance.enabled) {
++        OfflineAppearancePanel()
 +        return
 +    }
      var consent by rememberOnlineConsent()
      if (!consent) {
          MinecraftCapesOnlyScreen { consent = true }
 diff --git a/src/main/kotlin/org/polyfrost/polyplus/client/gui/menuwardrobe/MenuWardrobePage.kt b/src/main/kotlin/org/polyfrost/polyplus/client/gui/menuwardrobe/MenuWardrobePage.kt
-index f0a232b..d74c693 100644
+index f0a232b..57c63e8 100644
 --- a/src/main/kotlin/org/polyfrost/polyplus/client/gui/menuwardrobe/MenuWardrobePage.kt
 +++ b/src/main/kotlin/org/polyfrost/polyplus/client/gui/menuwardrobe/MenuWardrobePage.kt
-@@ -120,6 +120,10 @@ private fun capeNote(state: MojangCapeState): String? = when (state) {
+@@ -41,6 +41,7 @@ import kotlinx.coroutines.delay
+ import kotlinx.coroutines.launch
+ import org.joml.Vector3f
+ import org.polyfrost.polyplus.client.PolyPlusClient
++import org.polyfrost.polyplus.client.cosmetics.OfflineAppearance
+ import org.polyfrost.polyplus.client.cosmetics.CosmeticCatalog
+ import org.polyfrost.polyplus.client.cosmetics.CosmeticLoadProgress
+ import org.polyfrost.polyplus.client.cosmetics.MojangCape
+@@ -56,6 +57,7 @@ import org.polyfrost.polyplus.client.gui.preview.PlayerPreview
+ import org.polyfrost.polyplus.client.gui.preview.PlayerPreviewSource
+ import org.polyfrost.polyplus.client.gui.preview.PreviewLights
+ import org.polyfrost.polyplus.client.gui.preview.PreviewRotation
++import org.polyfrost.polyplus.client.gui.wardrobe.OfflineAppearancePanel
+ import org.polyfrost.polyplus.client.gui.wardrobe.BACK_VIEW_TYPES
+ import org.polyfrost.polyplus.client.gui.wardrobe.CosmeticUiItem
+ import org.polyfrost.polyplus.client.gui.wardrobe.CosmeticsLoadingScreen
+@@ -120,6 +122,10 @@ private fun capeNote(state: MojangCapeState): String? = when (state) {
  
  @Composable
  internal fun WardrobePage(onBack: () -> Unit, onMarketplace: () -> Unit) {
-+    if (org.polyfrost.polyplus.client.cosmetics.OfflineAppearance.enabled) {
-+        org.polyfrost.polyplus.client.gui.wardrobe.OfflineAppearancePanel(onBack)
++    if (OfflineAppearance.enabled) {
++        OfflineAppearancePanel(onBack)
 +        return
 +    }
      var consent by rememberOnlineConsent()
      WardrobeContent(consent, onBack, onMarketplace) { consent = true }
  }
 diff --git a/src/main/kotlin/org/polyfrost/polyplus/client/gui/preview/PlayerPreviewRenderer.kt b/src/main/kotlin/org/polyfrost/polyplus/client/gui/preview/PlayerPreviewRenderer.kt
-index d1ce0a6..5f586ef 100644
+index d1ce0a6..6b81f70 100644
 --- a/src/main/kotlin/org/polyfrost/polyplus/client/gui/preview/PlayerPreviewRenderer.kt
 +++ b/src/main/kotlin/org/polyfrost/polyplus/client/gui/preview/PlayerPreviewRenderer.kt
-@@ -1786,7 +1786,8 @@ object PlayerPreviewRenderer {
+@@ -16,6 +16,7 @@ import org.polyfrost.polyplus.client.cosmetics.CosmeticAssetCache
+ import org.polyfrost.polyplus.client.cosmetics.CosmeticCatalog
+ import org.polyfrost.polyplus.client.cosmetics.CosmeticEquipment
+ import org.polyfrost.polyplus.client.cosmetics.LocalAccountSkin
++import org.polyfrost.polyplus.client.cosmetics.OfflineAppearance
+ import org.polyfrost.polyplus.client.cosmetics.LocalSkinOverride
+ import org.polyfrost.polyplus.client.cosmetics.MojangCapeService
+ import org.polyfrost.polyplus.client.cosmetics.access.PlayerCosmeticsAccess
+@@ -1485,6 +1486,7 @@ import org.polyfrost.polyplus.client.cosmetics.CosmeticAssetCache
+ import org.polyfrost.polyplus.client.cosmetics.CosmeticCatalog
+ import org.polyfrost.polyplus.client.cosmetics.CosmeticEquipment
+ import org.polyfrost.polyplus.client.cosmetics.LocalAccountSkin
++import org.polyfrost.polyplus.client.cosmetics.OfflineAppearance
+ import org.polyfrost.polyplus.client.cosmetics.LocalSkinOverride
+ import org.polyfrost.polyplus.client.cosmetics.MojangCapeService
+ import org.polyfrost.polyplus.client.PolyPlusClient
+@@ -1786,7 +1788,8 @@ object PlayerPreviewRenderer {
              if (source.equipment.get(BodySlot.Backpack) != null) null
              else source.capeCosmeticId?.let(CosmeticAssetCache::getCapeResource) ?: source.mojangCape
          PlayerPreviewSource.LocalLive ->
 -            CosmeticCatalog.localEquipped().cape?.let(CosmeticAssetCache::getCapeResource)
-+            org.polyfrost.polyplus.client.cosmetics.OfflineAppearance.cape(ClientPlatform.localPlayerUuid())
++            OfflineAppearance.cape(ClientPlatform.localPlayerUuid())
 +                ?: CosmeticCatalog.localEquipped().cape?.let(CosmeticAssetCache::getCapeResource)
                  ?: if (!MojangCapeService.overridesLocalCape(ClientPlatform.localPlayerUuid())) playerCape(mc)
                  else MojangCapeService.localCapeTexture()
                      ?: if (MojangCapeService.localCapeHidden()) null else playerCape(mc)
 diff --git a/src/main/kotlin/org/polyfrost/polyplus/client/gui/wardrobe/OfflineAppearancePanel.kt b/src/main/kotlin/org/polyfrost/polyplus/client/gui/wardrobe/OfflineAppearancePanel.kt
 new file mode 100644
-index 0000000..0607f7b
+index 0000000..4a9a3c9
 --- /dev/null
 +++ b/src/main/kotlin/org/polyfrost/polyplus/client/gui/wardrobe/OfflineAppearancePanel.kt
-@@ -0,0 +1,81 @@
-+@file:OptIn(org.polyfrost.oneconfig.api.ui.v1.ExperimentalOneConfigUiApi::class)
+@@ -0,0 +1,82 @@
++@file:OptIn(ExperimentalOneConfigUiApi::class)
 +
 +package org.polyfrost.polyplus.client.gui.wardrobe
 +
@@ -289,6 +338,7 @@ index 0000000..0607f7b
 +import kotlinx.coroutines.Dispatchers
 +import kotlinx.coroutines.launch
 +import kotlinx.coroutines.withContext
++import org.polyfrost.oneconfig.api.ui.v1.ExperimentalOneConfigUiApi
 +import org.polyfrost.oneconfig.api.ui.v1.api.TinyFdApi
 +import org.polyfrost.oneconfig.api.ui.v1.components.Text
 +import org.polyfrost.oneconfig.api.ui.v1.components.TextButton
