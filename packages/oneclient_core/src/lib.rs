@@ -13,6 +13,7 @@ pub mod images;
 mod java_store;
 pub mod logger;
 pub mod migration;
+pub mod offline_appearance;
 pub mod recovery;
 pub mod relocate;
 pub mod reporting;

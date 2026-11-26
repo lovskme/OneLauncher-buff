@@ -10,14 +10,52 @@ permissions:
 
 concurrency:
   group: offline-windows-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 env:
   CARGO_PROFILE_RELEASE_LTO: thin
   CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 16
 
 jobs:
+  appearance-mod:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: Polyfrost/PolyPlus
+          ref: 462663858973b1298bc30820e707854997fcffe4
+          path: polyplus-src
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: |
+            21
+            25
+      - uses: gradle/actions/setup-gradle@v5
+      - name: Apply local wardrobe source changes
+        working-directory: polyplus-src
+        run: git apply ../distribution/local-appearance/polyplus.patch
+      - name: Build and test OneClient 1.8.9 component
+        working-directory: polyplus-src
+        run: bash ./gradlew ':1.8.9-ornithe:build' --no-daemon -Dorg.gradle.workers.max=2 -Dorg.gradle.jvmargs=-Xmx4G -Pkotlin.daemon.jvmargs=-Xmx3G
+      - name: Collect component
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p appearance-output
+          mapfile -t jars < <(find polyplus-src/versions/1.8.9-ornithe/build/libs -maxdepth 1 -type f -name '*.jar' ! -name '*-sources.jar' ! -name '*-dev.jar')
+          test "${#jars[@]}" -eq 1
+          cp "${jars[0]}" appearance-output/local-appearance-1.8.9.jar
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: local-appearance-1.8.9
+          path: appearance-output/local-appearance-1.8.9.jar
+          if-no-files-found: error
+          retention-days: 14
   installer:
+    needs: appearance-mod
     runs-on: windows-latest
     timeout-minutes: 120
     steps:
@@ -29,11 +67,20 @@ jobs:
           save-cache: true
           cache-namespace: offline-windows-cache
 
+      - name: Download bundled local wardrobe component
+        uses: actions/download-artifact@v8
+        with:
+          name: local-appearance-1.8.9
+          path: packages/oneclient_core/assets
+
       - name: Test authentication and offline profiles
         run: cargo test --locked -p oneclient_auth
 
+      - name: Test local PNG validation
+        run: cargo test --locked -p oneclient_core --features local-appearance offline_appearance::tests
+
       - name: Build launcher
-        run: cargo build --locked --release --bin oneclient_app
+        run: cargo build --locked --release --bin oneclient_app --features local-appearance
 
       - name: Stage app-local Visual C++ runtime
         run: python distribution/windows/bundle-crt.py

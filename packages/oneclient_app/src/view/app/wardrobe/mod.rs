@@ -1,4 +1,5 @@
 mod page;
+mod offline;
 mod parts;
 mod preview;
 

@@ -89,6 +89,25 @@ Microsoft sign-in. Installing a game version, Java, assets, or mods can require
 an internet connection; create and prepare the instance before playing without
 a connection.
 
+### Local skins and capes (this fork)
+
+Select your offline profile and open **Wardrobe**. Import a classic/slim skin
+PNG, import a cape PNG, or fetch a skin by Minecraft username. Skins must be
+64x64 or 64x32 pixels, and capes must be 64x32 pixels. Name lookup needs internet;
+the downloaded texture is saved locally for subsequent offline use.
+
+The custom Windows build includes a patched OneClient/PolyPlus component for
+**Minecraft 1.8.9 on Ornithe**. Create an instance with the OneClient bundle so
+its normal dependencies are present. The launcher installs the component when
+launching that instance with an offline profile. Open the in-game Wardrobe to
+change your skin/cape there too; both screens share the same per-profile files.
+Changes are visible on this client and do not sync to other players. Microsoft
+profiles retain the upstream online wardrobe. Paid catalog ownership is unchanged.
+
+Build with `--features local-appearance` after compiling the component using
+the Windows workflow. Source changes and build details are in
+`distribution/local-appearance/`.
+
 ### Packaging / Releasing
 
 Installers are produced with [**cargo-packager**](https://github.com/crabnebula-dev/cargo-packager)

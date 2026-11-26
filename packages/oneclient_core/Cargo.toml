@@ -15,6 +15,7 @@ path = "src/lib.rs"
 
 [features]
 default = []
+local-appearance = []
 
 [dev-dependencies]
 async-tungstenite = {version = "=0.35.0", features = ["tokio-runtime"]}

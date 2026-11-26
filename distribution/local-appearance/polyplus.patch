@@ -1,0 +1,343 @@
+diff --git a/src/main/java/org/polyfrost/polyplus/mixin/client/cosmetics/MixinAbstractClientPlayer.java b/src/main/java/org/polyfrost/polyplus/mixin/client/cosmetics/MixinAbstractClientPlayer.java
+index 5b41160..01cf4a9 100644
+--- a/src/main/java/org/polyfrost/polyplus/mixin/client/cosmetics/MixinAbstractClientPlayer.java
++++ b/src/main/java/org/polyfrost/polyplus/mixin/client/cosmetics/MixinAbstractClientPlayer.java
+@@ -153,6 +153,8 @@ public abstract class MixinAbstractClientPlayer extends PlayerEntity implements
+     @ModifyReturnValue(method = "getCapeTextureLocation", at = @At("RETURN"))
+     private Identifier polyplus$replaceCapeTexture(Identifier original) {
+         UUID playerId = ((ClientPlayerEntity) (Object) this).getUuid();
++        Identifier localCape = org.polyfrost.polyplus.client.cosmetics.OfflineAppearance.cape(playerId);
++        if (localCape != null) return localCape;
+         switch (CapeResolver.decide(playerId, original == null ? null : original.getNamespace())) {
+             case POLYPLUS:
+                 return polyplus$orOriginal(CosmeticAssetCache.getCapeTexture(playerId), original);
+diff --git a/src/main/kotlin/org/polyfrost/polyplus/client/cosmetics/LocalSkinOverride.kt b/src/main/kotlin/org/polyfrost/polyplus/client/cosmetics/LocalSkinOverride.kt
+index 32e0bd4..8f0a5f0 100644
+--- a/src/main/kotlin/org/polyfrost/polyplus/client/cosmetics/LocalSkinOverride.kt
++++ b/src/main/kotlin/org/polyfrost/polyplus/client/cosmetics/LocalSkinOverride.kt
+@@ -13,7 +13,7 @@ import net.minecraft.world.entity.player.PlayerSkin
+ 
+ object LocalSkinOverride {
+     @JvmStatic
+-    fun forPlayer(playerId: UUID): PreviewSkin? = MojangSkinService.localPreviewSkin(playerId)
++    fun forPlayer(playerId: UUID): PreviewSkin? = OfflineAppearance.skin(playerId) ?: MojangSkinService.localPreviewSkin(playerId)
+ 
+     //? if >= 1.21.10 {
+     @JvmStatic
+diff --git a/src/main/kotlin/org/polyfrost/polyplus/client/cosmetics/MojangSkinService.kt b/src/main/kotlin/org/polyfrost/polyplus/client/cosmetics/MojangSkinService.kt
+index f544e4e..8ee9a52 100644
+--- a/src/main/kotlin/org/polyfrost/polyplus/client/cosmetics/MojangSkinService.kt
++++ b/src/main/kotlin/org/polyfrost/polyplus/client/cosmetics/MojangSkinService.kt
+@@ -211,6 +211,7 @@ object MojangSkinService {
+ 
+     @JvmStatic
+     fun isStaleLocalSkin(playerId: UUID, textureId: String?): Boolean {
++        if (OfflineAppearance.skin(playerId) != null) return true
+         val current = override ?: return false
+         if (textureId == null || current.owner != playerId) return false
+         return textureId.startsWith(DEFAULT_SKIN_PREFIX) || textureId in current.replaceablePaths
+diff --git a/src/main/kotlin/org/polyfrost/polyplus/client/cosmetics/OfflineAppearance.kt b/src/main/kotlin/org/polyfrost/polyplus/client/cosmetics/OfflineAppearance.kt
+new file mode 100644
+index 0000000..89919dd
+--- /dev/null
++++ b/src/main/kotlin/org/polyfrost/polyplus/client/cosmetics/OfflineAppearance.kt
+@@ -0,0 +1,133 @@
++package org.polyfrost.polyplus.client.cosmetics
++
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.launch
++import net.minecraft.resources.Identifier
++import org.polyfrost.polyplus.client.PolyPlusClient
++import org.polyfrost.polyplus.client.cosmetics.assets.RemoteTextures
++import org.polyfrost.polyplus.client.cosmetics.outfits.SkinLibrary
++import org.polyfrost.polyplus.client.cosmetics.outfits.SkinModel
++import org.polyfrost.polyplus.client.gui.preview.PreviewSkin
++import org.polyfrost.polyplus.client.utils.ClientPlatform
++import java.io.ByteArrayInputStream
++import java.nio.file.AtomicMoveNotSupportedException
++import java.nio.file.Files
++import java.nio.file.Path
++import java.nio.file.StandardCopyOption
++import java.util.UUID
++import javax.imageio.ImageIO
++
++/** Local profile textures. No account tokens or cosmetic-store calls are used. */
++object OfflineAppearance {
++    private const val LIMIT = 1024 * 1024
++    private val root: Path? = System.getProperty("oneclient.offline.appearance.dir")?.let { Path.of(it) }
++    val enabled: Boolean get() = root?.fileName?.toString() == ClientPlatform.localPlayerUuid().toString() && MojangAuth.accessToken() == null
++
++    private data class Look(val owner: UUID, val skin: PreviewSkin?, val cape: Identifier?)
++    @Volatile private var look: Look? = null
++    @Volatile private var pending = false
++    private var nextPoll = 0L
++    @Volatile private var stamp: String? = null
++
++    @JvmStatic fun skin(owner: UUID): PreviewSkin? {
++        poll()
++        return look?.takeIf { enabled && it.owner == owner && owner == ClientPlatform.localPlayerUuid() }?.skin
++    }
++
++    @JvmStatic fun cape(owner: UUID): Identifier? {
++        poll()
++        return look?.takeIf { enabled && it.owner == owner && owner == ClientPlatform.localPlayerUuid() }?.cape
++    }
++
++    private fun poll() {
++        if (!enabled || pending || System.currentTimeMillis() < nextPoll) return
++        nextPoll = System.currentTimeMillis() + 1000
++        pending = true
++        PolyPlusClient.SCOPE.launch(Dispatchers.IO) {
++            try {
++                val dir = root ?: return@launch
++                val owner = ClientPlatform.localPlayerUuid()
++                val fingerprint = listOf("skin.png", "cape.png", "model.txt").joinToString { name ->
++                    val file = dir.resolve(name)
++                    if (Files.isRegularFile(file)) "$name:${Files.getLastModifiedTime(file)}:${Files.size(file)}" else "$name:absent"
++                }
++                if (stamp == fingerprint) return@launch
++                val slim = Files.isRegularFile(dir.resolve("model.txt")) && Files.readString(dir.resolve("model.txt")).trim() == "slim"
++                val skinId = loadTexture(dir.resolve("skin.png"), false, owner)
++                val capeId = loadTexture(dir.resolve("cape.png"), true, owner)
++                look = Look(owner, skinId?.let { PreviewSkin(it, slim) }, capeId)
++                stamp = fingerprint
++            } catch (_: Exception) {
++                // Keep the last complete texture while a file is being replaced.
++            } finally {
++                pending = false
++            }
++        }
++    }
++
++    private fun loadTexture(file: Path, cape: Boolean, owner: UUID): Identifier? {
++        if (!Files.isRegularFile(file)) return null
++        val image = decode(read(file), cape)
++        val prepared = file.resolveSibling(if (cape) ".render-cape.png" else ".render-skin.png")
++        val normalized = if (cape) image else SkinLibrary.modernLayout(SkinLibrary.previewImage(image))
++        check(ImageIO.write(normalized, "png", prepared.toFile())) { "Could not prepare PNG texture." }
++        val id = Identifier.fromNamespaceAndPath("polyplus", "local/${owner}/${if (cape) "cape" else "skin"}")
++        return RemoteTextures.register(id, prepared, keepOnReset = true)
++    }
++
++    private fun read(file: Path): ByteArray {
++        require(Files.size(file) <= LIMIT) { "PNG files must be smaller than 1 MB." }
++        return Files.readAllBytes(file).also { require(it.size <= LIMIT) { "PNG file is too large." } }
++    }
++
++    internal fun decode(bytes: ByteArray, cape: Boolean): java.awt.image.BufferedImage {
++        require(bytes.size <= LIMIT) { "PNG file is too large." }
++        val size = ImageIO.createImageInputStream(ByteArrayInputStream(bytes)).use { input ->
++            val reader = ImageIO.getImageReaders(input).asSequence().firstOrNull() ?: error("Invalid PNG.")
++            try {
++                require(reader.formatName.equals("png", true)) { "Choose a PNG image." }
++                reader.input = input
++                reader.getWidth(0) to reader.getHeight(0)
++            } finally { reader.dispose() }
++        }
++        require(size.first == 64 && (size.second == 32 || (!cape && size.second == 64))) {
++            if (cape) "Capes must be 64 x 32 PNG images." else "Skins must be 64 x 64 or 64 x 32 PNG images."
++        }
++        return ImageIO.read(ByteArrayInputStream(bytes)) ?: error("Invalid PNG.")
++    }
++
++    private fun write(file: Path, bytes: ByteArray) {
++        Files.createDirectories(file.parent)
++        val temp = Files.createTempFile(file.parent, ".appearance-", ".tmp")
++        try {
++            Files.write(temp, bytes)
++            try { Files.move(temp, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE) }
++            catch (_: AtomicMoveNotSupportedException) { Files.move(temp, file, StandardCopyOption.REPLACE_EXISTING) }
++        } finally { Files.deleteIfExists(temp) }
++    }
++
++    fun importFile(file: Path, cape: Boolean, slim: Boolean) = save(read(file), cape, slim)
++
++    fun save(bytes: ByteArray, cape: Boolean, slim: Boolean) {
++        check(enabled) { "Select an offline profile to use the local wardrobe." }
++        decode(bytes, cape)
++        val dir = root ?: error("Offline profile directory is unavailable.")
++        if (!cape) write(dir.resolve("model.txt"), (if (slim) "slim" else "classic").toByteArray())
++        write(dir.resolve(if (cape) "cape.png" else "skin.png"), bytes)
++        stamp = null
++    }
++
++    suspend fun fromUsername(name: String) {
++        val trimmed = name.trim()
++        require(Regex("^[A-Za-z0-9_]{1,16}$").matches(trimmed)) { "Enter a Minecraft username." }
++        val id = MojangSkinService.uuidForName(trimmed).getOrThrow() ?: error("Player not found.")
++        val skin = MojangSkinService.profileSkin(id).getOrThrow() ?: error("This player has no custom skin.")
++        save(SkinLibrary.fetchSkin(skin.url).getOrThrow(), false, skin.model == SkinModel.Slim)
++    }
++
++    fun clear(cape: Boolean) {
++        check(enabled)
++        Files.deleteIfExists(root!!.resolve(if (cape) "cape.png" else "skin.png"))
++        stamp = null
++    }
++}
+diff --git a/src/main/kotlin/org/polyfrost/polyplus/client/cosmetics/outfits/SkinLibrary.kt b/src/main/kotlin/org/polyfrost/polyplus/client/cosmetics/outfits/SkinLibrary.kt
+index f4f9358..eb703c7 100644
+--- a/src/main/kotlin/org/polyfrost/polyplus/client/cosmetics/outfits/SkinLibrary.kt
++++ b/src/main/kotlin/org/polyfrost/polyplus/client/cosmetics/outfits/SkinLibrary.kt
+@@ -576,7 +576,7 @@ object SkinLibrary {
+         *///?}
+     }
+ 
+-    private fun modernLayout(source: BufferedImage): BufferedImage {
++    internal fun modernLayout(source: BufferedImage): BufferedImage {
+         if (source.height != 32) return source
+         val image = BufferedImage(64, 64, BufferedImage.TYPE_INT_ARGB)
+         val graphics = image.createGraphics()
+@@ -586,7 +586,7 @@ object SkinLibrary {
+         return image
+     }
+ 
+-    private fun previewImage(source: BufferedImage): BufferedImage {
++    internal fun previewImage(source: BufferedImage): BufferedImage {
+         val image = BufferedImage(source.width, source.height, BufferedImage.TYPE_INT_ARGB)
+         image.createGraphics().apply { drawImage(source, 0, 0, null) }.dispose()
+         opaque(image, 0, 0, 32, 16)
+diff --git a/src/main/kotlin/org/polyfrost/polyplus/client/gui/PolyPlusCosmeticsScreen.kt b/src/main/kotlin/org/polyfrost/polyplus/client/gui/PolyPlusCosmeticsScreen.kt
+index b2a05fe..2ac39da 100644
+--- a/src/main/kotlin/org/polyfrost/polyplus/client/gui/PolyPlusCosmeticsScreen.kt
++++ b/src/main/kotlin/org/polyfrost/polyplus/client/gui/PolyPlusCosmeticsScreen.kt
+@@ -36,6 +36,10 @@ import org.polyfrost.polyplus.client.utils.ClientPlatform
+ 
+ @Composable
+ internal fun PolyPlusCosmeticsScreen() {
++    if (org.polyfrost.polyplus.client.cosmetics.OfflineAppearance.enabled) {
++        org.polyfrost.polyplus.client.gui.wardrobe.OfflineAppearancePanel()
++        return
++    }
+     var consent by rememberOnlineConsent()
+     if (!consent) {
+         MinecraftCapesOnlyScreen { consent = true }
+diff --git a/src/main/kotlin/org/polyfrost/polyplus/client/gui/menuwardrobe/MenuWardrobePage.kt b/src/main/kotlin/org/polyfrost/polyplus/client/gui/menuwardrobe/MenuWardrobePage.kt
+index f0a232b..d74c693 100644
+--- a/src/main/kotlin/org/polyfrost/polyplus/client/gui/menuwardrobe/MenuWardrobePage.kt
++++ b/src/main/kotlin/org/polyfrost/polyplus/client/gui/menuwardrobe/MenuWardrobePage.kt
+@@ -120,6 +120,10 @@ private fun capeNote(state: MojangCapeState): String? = when (state) {
+ 
+ @Composable
+ internal fun WardrobePage(onBack: () -> Unit, onMarketplace: () -> Unit) {
++    if (org.polyfrost.polyplus.client.cosmetics.OfflineAppearance.enabled) {
++        org.polyfrost.polyplus.client.gui.wardrobe.OfflineAppearancePanel(onBack)
++        return
++    }
+     var consent by rememberOnlineConsent()
+     WardrobeContent(consent, onBack, onMarketplace) { consent = true }
+ }
+diff --git a/src/main/kotlin/org/polyfrost/polyplus/client/gui/wardrobe/OfflineAppearancePanel.kt b/src/main/kotlin/org/polyfrost/polyplus/client/gui/wardrobe/OfflineAppearancePanel.kt
+new file mode 100644
+index 0000000..fbdf7a8
+--- /dev/null
++++ b/src/main/kotlin/org/polyfrost/polyplus/client/gui/wardrobe/OfflineAppearancePanel.kt
+@@ -0,0 +1,71 @@
++@file:OptIn(org.polyfrost.oneconfig.api.ui.v1.ExperimentalOneConfigUiApi::class)
++
++package org.polyfrost.polyplus.client.gui.wardrobe
++
++import androidx.compose.foundation.layout.Arrangement
++import androidx.compose.foundation.layout.Column
++import androidx.compose.foundation.layout.fillMaxSize
++import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.foundation.layout.height
++import androidx.compose.foundation.layout.padding
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.rememberCoroutineScope
++import androidx.compose.runtime.setValue
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.unit.dp
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.launch
++import kotlinx.coroutines.withContext
++import org.polyfrost.oneconfig.api.ui.v1.api.TinyFdApi
++import org.polyfrost.oneconfig.api.ui.v1.components.Text
++import org.polyfrost.oneconfig.api.ui.v1.components.TextButton
++import org.polyfrost.oneconfig.api.ui.v1.components.TextField
++import org.polyfrost.polyplus.client.cosmetics.OfflineAppearance
++import org.polyfrost.polyplus.client.gui.preview.PlayerPreview
++import org.polyfrost.polyplus.client.gui.preview.PlayerPreviewSource
++
++/** The existing wardrobe opens this page for local offline profiles. */
++@Composable
++internal fun OfflineAppearancePanel(onBack: (() -> Unit)? = null) {
++    val scope = rememberCoroutineScope()
++    var name by remember { mutableStateOf("") }
++    var slim by remember { mutableStateOf(false) }
++    var busy by remember { mutableStateOf(false) }
++    var message by remember { mutableStateOf("Changes are local to this client. Name lookup needs internet.") }
++
++    fun action(work: suspend () -> Unit) {
++        if (busy) return
++        busy = true
++        scope.launch {
++            message = try {
++                withContext(Dispatchers.IO) { work() }
++                "Appearance saved. It applies in-game automatically."
++            } catch (error: Exception) { error.message ?: "Could not update appearance." }
++            finally { busy = false }
++        }
++    }
++
++    fun choose(cape: Boolean) = action {
++        val file = TinyFdApi.getInstance().openFileSelector(
++            if (cape) "Choose a cape" else "Choose a skin", null, arrayOf("*.png"), "PNG images",
++        ) ?: return@action
++        OfflineAppearance.importFile(file, cape, slim)
++    }
++
++    Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
++        onBack?.let { TextButton("Back", { it() }) }
++        Text("Local wardrobe")
++        PlayerPreview(Modifier.fillMaxWidth().height(200.dp), source = PlayerPreviewSource.LocalLive, autoSpin = false, live = true)
++        TextButton("Import skin PNG", { choose(false) })
++        TextButton(if (slim) "Model: slim (click to change)" else "Model: classic (click to change)", { slim = !slim })
++        TextButton("Import cape PNG (64 x 32)", { choose(true) })
++        TextField(value = name, onValueChange = { name = it }, placeholder = "Minecraft username", modifier = Modifier.fillMaxWidth())
++        TextButton("Use skin by username", { action { OfflineAppearance.fromUsername(name) } })
++        TextButton("Remove skin", { action { OfflineAppearance.clear(false) } })
++        TextButton("Remove cape", { action { OfflineAppearance.clear(true) } })
++        Text(if (busy) "Working..." else message)
++    }
++}
+diff --git a/src/test/kotlin/org/polyfrost/polyplus/test/OfflineAppearanceTest.kt b/src/test/kotlin/org/polyfrost/polyplus/test/OfflineAppearanceTest.kt
+new file mode 100644
+index 0000000..daa3b21
+--- /dev/null
++++ b/src/test/kotlin/org/polyfrost/polyplus/test/OfflineAppearanceTest.kt
+@@ -0,0 +1,31 @@
++package org.polyfrost.polyplus.test
++
++import java.awt.image.BufferedImage
++import java.io.ByteArrayOutputStream
++import javax.imageio.ImageIO
++import org.junit.jupiter.api.Assertions.assertEquals
++import org.junit.jupiter.api.Assertions.assertThrows
++import org.junit.jupiter.api.Test
++import org.polyfrost.polyplus.client.cosmetics.OfflineAppearance
++
++class OfflineAppearanceTest {
++    private fun png(width: Int, height: Int): ByteArray = ByteArrayOutputStream().use { out ->
++        ImageIO.write(BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB), "png", out)
++        out.toByteArray()
++    }
++
++    @Test
++    fun `accepts classic and modern skins and cape dimensions`() {
++        assertEquals(64, OfflineAppearance.decode(png(64, 64), false).height)
++        assertEquals(32, OfflineAppearance.decode(png(64, 32), false).height)
++        assertEquals(32, OfflineAppearance.decode(png(64, 32), true).height)
++    }
++
++    @Test
++    fun `rejects malformed oversized and wrong dimension textures`() {
++        assertThrows(IllegalArgumentException::class.java) { OfflineAppearance.decode(png(32, 32), false) }
++        assertThrows(IllegalArgumentException::class.java) { OfflineAppearance.decode(png(64, 64), true) }
++        assertThrows(IllegalArgumentException::class.java) { OfflineAppearance.decode(ByteArray(1024 * 1024 + 1), false) }
++        assertThrows(Exception::class.java) { OfflineAppearance.decode("invalid".toByteArray(), false) }
++    }
++}

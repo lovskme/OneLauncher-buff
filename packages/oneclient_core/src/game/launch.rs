@@ -428,6 +428,12 @@ async fn start(
         crate::game::link_cluster_logs(&cluster, &cwd).await;
     }
 
+    #[cfg(feature = "local-appearance")]
+    if account.is_offline() && cluster.mc_version == "1.8.9" && cluster.mc_loader == GameLoader::Ornithe {
+        crate::offline_appearance::prepare_game(&cwd.join("mods")).await
+            .map_err(|message| std::io::Error::other(message))?;
+    }
+
     if matches!(cluster.mc_loader, GameLoader::Fabric | GameLoader::Ornithe) {
         crate::game::fabric::drop_stale_remapped_jars(
             &cwd,
@@ -540,6 +546,11 @@ async fn start(
 
     command
         .args(jvm_args)
+        .args(if account.is_offline() {
+            vec![format!("-Doneclient.offline.appearance.dir={}",
+                crate::offline_appearance::profile_dir(account.id)
+                    .map_err(std::io::Error::other)?.display())]
+        } else { Vec::new() })
         .arg(&version_info.main_class)
         .args(mc_args)
         .current_dir(&cwd);
