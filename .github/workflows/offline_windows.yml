@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: offline-wardrobe-${{ github.ref }}
@@ -15,6 +16,7 @@ concurrency:
 env:
   CARGO_PROFILE_RELEASE_LTO: thin
   CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 16
+  POLYPLUS_REVISION: 462663858973b1298bc30820e707854997fcffe4
 
 jobs:
   appearance-mod:
@@ -22,27 +24,50 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Check validated component source fingerprint
+        id: source
+        shell: bash
+        run: |
+          if [[ "$POLYPLUS_REVISION" == "462663858973b1298bc30820e707854997fcffe4" && "$(git hash-object distribution/local-appearance/polyplus.patch)" == "076efd3eac31fcd8811a3f992e672de497204cf2" ]]; then
+            echo "validated=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Reuse component that passed build, tests and lint
+        id: reuse
+        if: steps.source.outputs.validated == 'true'
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          name: local-appearance-1.8.9
+          run-id: 45882143691
+          github-token: ${{ github.token }}
+          path: appearance-output
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        if: steps.reuse.outcome != 'success'
         with:
           repository: Polyfrost/PolyPlus
-          ref: 462663858973b1298bc30820e707854997fcffe4
+          ref: ${{ env.POLYPLUS_REVISION }}
           path: polyplus-src
       - uses: actions/setup-java@v5
+        if: steps.reuse.outcome != 'success'
         with:
           distribution: temurin
           java-version: |
             21
             25
       - uses: gradle/actions/setup-gradle@v5
+        if: steps.reuse.outcome != 'success'
         with:
           cache-read-only: false
       - name: Apply local wardrobe source changes
+        if: steps.reuse.outcome != 'success'
         working-directory: polyplus-src
         run: git apply ../distribution/local-appearance/polyplus.patch
       - name: Build and test OneClient 1.8.9 component
+        if: steps.reuse.outcome != 'success'
         working-directory: polyplus-src
         run: bash ./gradlew ':1.8.9-ornithe:build' --no-daemon -Dorg.gradle.workers.max=2 -Dorg.gradle.jvmargs=-Xmx4G -Pkotlin.daemon.jvmargs=-Xmx3G
       - name: Collect component
+        if: steps.reuse.outcome != 'success'
         shell: bash
         run: |
           set -euo pipefail

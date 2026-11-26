@@ -1,4 +1,5 @@
 use freya::prelude::*;
+use std::hash::{Hash, Hasher};
 use oneclient_core::offline_appearance::{self as local, Appearance};
 use uuid::Uuid;
 
@@ -102,5 +103,9 @@ impl Component for OfflineWardrobe {
         ScrollArea::new().width(Size::fill()).height(Size::fill()).child(content)
     }
 
-    fn render_key(&self) -> DiffKey { DiffKey::U64(self.key_hash()) }
+    fn render_key(&self) -> DiffKey {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.account.hash(&mut hasher);
+        DiffKey::U64(hasher.finish())
+    }
 }
