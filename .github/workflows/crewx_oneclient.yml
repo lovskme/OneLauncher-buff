@@ -1,0 +1,114 @@
+name: CrewX OneClient compatibility build
+
+on:
+  push:
+    branches: [crewx-oneclient]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: crewx-oneclient-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Check out pinned CrewX source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: 4everdies/CrewX-Injector
+          ref: ffc30cc7ed9c7c881c397397bfbc2983bd49d3d4
+          path: crewx-source
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '8'
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+          cache-dependency-path: crewx-source/**/*.gradle.kts
+      - name: Apply OneClient source changes
+        shell: pwsh
+        run: |
+          git -C crewx-source apply --check ../distribution/crewx-oneclient/oneclient.patch
+          if ($LASTEXITCODE -ne 0) { throw 'Source patch does not match pinned revision' }
+          git -C crewx-source apply ../distribution/crewx-oneclient/oneclient.patch
+          if ($LASTEXITCODE -ne 0) { throw 'Patch failed' }
+          Copy-Item distribution/crewx-oneclient/OrnitheMappingRegressionTest.java crewx-source/tools/
+          Copy-Item distribution/crewx-oneclient/check_oneclient_payload.py crewx-source/tools/
+          Add-Content crewx-source/gradle.properties "`norg.gradle.java.installations.paths=$($env:JAVA_HOME_8_X64.Replace('\','/'))"
+      - name: Generate and verify complete Ornithe mappings
+        working-directory: crewx-source
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory build-tools -Force | Out-Null
+          javac -proc:none -d build-tools tools/GenerateOrnitheSrg.java tools/OrnitheMappingRegressionTest.java
+          if ($LASTEXITCODE -ne 0) { throw 'Mapping tools compilation failed' }
+          java -cp build-tools GenerateOrnitheSrg src/main/resources/crewx/inject/notch-joined.srg src/main/resources/crewx/inject/ornithe-intermediary.tiny src/main/resources/crewx/inject/ornithe-joined.srg
+          if ($LASTEXITCODE -ne 0) { throw 'Mapping generation failed' }
+          java -cp build-tools OrnitheMappingRegressionTest src/main/resources/crewx/inject
+          if ($LASTEXITCODE -ne 0) { throw 'Mapping regression failed' }
+      - name: Download verified vanilla hierarchy and update bundled document
+        shell: python
+        run: |
+          import hashlib, json, pathlib, urllib.request
+          root = pathlib.Path('crewx-source')
+          resources = root / 'src/main/resources/crewx/inject'
+          path = resources / 'mappings.json'
+          document = json.loads(path.read_text(encoding='utf-8'))
+          document['profiles']['ornithe']['resources']['ornithe-joined.srg'] = (resources / 'ornithe-joined.srg').read_text(encoding='utf-8')
+          path.write_text(json.dumps(document), encoding='utf-8')
+          metadata_url = 'https://piston-meta.mojang.com/v1/packages/d546f1707a3f2b7d034eece5ea2e311eda875787/1.8.9.json'
+          with urllib.request.urlopen(metadata_url, timeout=60) as response:
+              metadata = json.load(response)
+          client = metadata['downloads']['client']
+          with urllib.request.urlopen(client['url'], timeout=120) as response:
+              data = response.read()
+          expected = '3870888a6c3d349d3771a3e9d16c9bf5e076b908'
+          assert client['sha1'] == expected and hashlib.sha1(data).hexdigest() == expected
+          (root / 'build-tools/vanilla-1.8.9.jar').write_bytes(data)
+      - name: Run CrewX Java tests
+        working-directory: crewx-source
+        shell: pwsh
+        run: |
+          .\gradlew.bat test --no-daemon
+          if ($LASTEXITCODE -ne 0) { throw 'CrewX tests failed' }
+      - name: Build Windows x64 injector from patched source
+        working-directory: crewx-source
+        shell: pwsh
+        run: |
+          .\Build-Injector.ps1 -Jdk17 $env:JAVA_HOME_17_X64 -Jdk8 $env:JAVA_HOME_8_X64 -OneClientGame build-tools/vanilla-1.8.9.jar
+      - name: Check emitted payload linkage against vanilla hierarchy
+        working-directory: crewx-source
+        shell: pwsh
+        run: |
+          python tools/check_oneclient_payload.py build/libs/CrewX-inject-ornithe.jar build-tools/vanilla-1.8.9.jar src/main/resources/crewx/inject --report build-tools/oneclient-linkage.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Unresolved OneClient payload mappings' }
+          Get-FileHash dist/CrewXInjector.exe -Algorithm SHA256 | Format-List | Out-File dist/SHA256.txt
+      - name: Upload executable and source changes
+        if: success()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: CrewX-OneClient-Windows-x64
+          path: |
+            crewx-source/dist/*
+            crewx-source/build-tools/oneclient-linkage.txt
+            distribution/crewx-oneclient/*
+          if-no-files-found: error
+      - name: Upload test and build diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: CrewX-OneClient-build-diagnostics
+          path: |
+            crewx-source/build/reports/tests/
+            crewx-source/build/test-results/
+            crewx-source/build-tools/oneclient-linkage.txt
+          if-no-files-found: ignore

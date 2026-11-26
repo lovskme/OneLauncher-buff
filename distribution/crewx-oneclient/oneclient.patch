@@ -1,0 +1,295 @@
+diff --git a/Build-Injector.ps1 b/Build-Injector.ps1
+index 8d17b99..e2c0d87 100644
+--- a/Build-Injector.ps1
++++ b/Build-Injector.ps1
+@@ -1,6 +1,7 @@
+ param(
+     [string]$Jdk17 = $env:JAVA_HOME,
+-    [string]$Jdk8
++    [string]$Jdk8,
++    [string]$OneClientGame
+ )
+ 
+ $ErrorActionPreference = 'Stop'
+@@ -106,8 +107,12 @@ $taskOrnitheMapping = Join-Path $taskClasses 'ornithe-joined.srg'
+     (Join-Path $taskMappings 'ornithe-intermediary.tiny') $taskOrnitheMapping
+ if ($LASTEXITCODE -ne 0) { throw 'Falha ao preparar os mappings Ornithe.' }
+ $taskOneClientVersions = Join-Path $env:APPDATA 'Polyfrost\OneClient\metadata\versions'
+-$taskOneClientGame = Get-ChildItem -LiteralPath $taskOneClientVersions -Recurse -Filter '1.8.9-*.jar' -File -ErrorAction SilentlyContinue |
+-    Sort-Object LastWriteTime -Descending | Select-Object -First 1
++if ($OneClientGame) {
++    $taskOneClientGame = Get-Item -LiteralPath $OneClientGame
++} else {
++    $taskOneClientGame = Get-ChildItem -LiteralPath $taskOneClientVersions -Recurse -Filter '1.8.9-*.jar' -File -ErrorAction SilentlyContinue |
++        Sort-Object LastWriteTime -Descending | Select-Object -First 1
++}
+ if ($taskOneClientGame) {
+     & $taskJava -cp "$taskClasses;$taskAsmCp" RemapCrewToNotch `
+         $taskNamedPayload $taskOrnithePayload $taskOrnitheMapping `
+@@ -115,11 +120,7 @@ if ($taskOneClientGame) {
+         (Join-Path $taskMappings 'notch-fields.csv') $taskOneClientGame.FullName `
+         (Join-Path $taskMappings 'ornithe-intermediary.tiny')
+ } else {
+-    Write-Warning 'OneClient game jar ausente; o payload Ornithe sera gerado sem hierarquia de classes.'
+-    & $taskJava -cp "$taskClasses;$taskAsmCp" RemapCrewToNotch `
+-        $taskNamedPayload $taskOrnithePayload $taskOrnitheMapping `
+-        (Join-Path $taskMappings 'notch-methods.csv') `
+-        (Join-Path $taskMappings 'notch-fields.csv')
++    throw 'OneClient game jar ausente. Informe -OneClientGame para validar a hierarquia; payload sem hierarquia nao sera distribuido.'
+ }
+ if ($LASTEXITCODE -ne 0) { throw 'Falha ao preparar o payload OneClient.' }
+ 
+diff --git a/src/main/java/crewx/event/EventManager.java b/src/main/java/crewx/event/EventManager.java
+index 625547b..b1c1d9e 100644
+--- a/src/main/java/crewx/event/EventManager.java
++++ b/src/main/java/crewx/event/EventManager.java
+@@ -168,9 +168,7 @@ public final class EventManager {
+             if (REPORTED_FAILURES.add(key)) {
+                 crewx.util.ClientLog.log("event handler FAILED " + key + " "
+                         + (cause.getStackTrace().length == 0 ? "" : cause.getStackTrace()[0]));
+-                if (crewx.inject.NotchMappings.isCheatBreaker()) {
+-                    crewx.inject.CrewXBootstrap.log("event handler FAILED " + key);
+-                }
++                crewx.inject.CrewXBootstrap.log("event handler FAILED " + key);
+             }
+         }
+     }
+diff --git a/src/main/java/crewx/inject/CrewXBootstrap.java b/src/main/java/crewx/inject/CrewXBootstrap.java
+index f9fdff4..b772159 100644
+--- a/src/main/java/crewx/inject/CrewXBootstrap.java
++++ b/src/main/java/crewx/inject/CrewXBootstrap.java
+@@ -526,7 +526,7 @@ public final class CrewXBootstrap {
+         }
+     }
+ 
+-    static String describeFailure(Throwable error) {
++    public static String describeFailure(Throwable error) {
+         StringBuilder detail = new StringBuilder();
+         int depth = 0;
+         for (Throwable current = error; current != null && depth < 4;
+diff --git a/src/main/java/crewx/inject/CrewXRuntimeHooks.java b/src/main/java/crewx/inject/CrewXRuntimeHooks.java
+index 98ddcbc..524132f 100644
+--- a/src/main/java/crewx/inject/CrewXRuntimeHooks.java
++++ b/src/main/java/crewx/inject/CrewXRuntimeHooks.java
+@@ -99,6 +99,8 @@ public final class CrewXRuntimeHooks {
+     private static boolean clickGuiFallbackLogged;
+     private static boolean clickGuiFallbackErrorLogged;
+     private static boolean frameOverlayFailureLogged;
++    private static boolean tickPreFailureLogged;
++    private static boolean tickPostFailureLogged;
+     private static boolean itemRenderStateChecked;
+     private static String lastTitleScreenClass;
+ 
+@@ -227,6 +229,8 @@ public final class CrewXRuntimeHooks {
+         initializationFailed = false;
+         tickCounter = 0;
+         firstTickSeen = false;
++        tickPreFailureLogged = false;
++        tickPostFailureLogged = false;
+         firstFrameSeen = false;
+         rshiftWasDown = false;
+         rshiftDispatchedThisTick = false;
+@@ -458,7 +462,11 @@ public final class CrewXRuntimeHooks {
+                 diagnose();
+             }
+             EventManager.call(new TickEvent(EventType.PRE));
+-        } catch (Throwable ignored) {
++        } catch (Throwable error) {
++            if (!tickPreFailureLogged) {
++                tickPreFailureLogged = true;
++                CrewXBootstrap.log("onTickPre FAILED: " + CrewXBootstrap.describeFailure(error));
++            }
+ 
+         }
+     }
+@@ -528,7 +536,11 @@ public final class CrewXRuntimeHooks {
+                         + " sentHook=" + firstClientPacketSent
+                         + " sent2Hook=" + firstClientPacketSent2);
+             }
+-        } catch (Throwable ignored) {
++        } catch (Throwable error) {
++            if (!tickPostFailureLogged) {
++                tickPostFailureLogged = true;
++                CrewXBootstrap.log("onTickPost FAILED: " + CrewXBootstrap.describeFailure(error));
++            }
+ 
+         }
+     }
+@@ -601,6 +613,13 @@ public final class CrewXRuntimeHooks {
+             }
+             if (!pressed) return;
+             Minecraft mc = Minecraft.getMinecraft();
++            Module menu = CrewX.moduleManager == null ? null
++                    : CrewX.moduleManager.modules.get(crewx.module.modules.render.GuiModule.class);
++            if (menu != null && keyCode == menu.getKey()) {
++                CrewXBootstrap.log("ClickGui bind received: " + keyCode + "; screen="
++                        + (mc == null || mc.currentScreen == null ? "<none>"
++                                : mc.currentScreen.getClass().getName()));
++            }
+             if (mc == null || mc.currentScreen != null) {
+                 return;
+             }
+diff --git a/src/main/java/crewx/inject/MappingRepository.java b/src/main/java/crewx/inject/MappingRepository.java
+index b05db25..69cd984 100644
+--- a/src/main/java/crewx/inject/MappingRepository.java
++++ b/src/main/java/crewx/inject/MappingRepository.java
+@@ -30,6 +30,13 @@ final class MappingRepository {
+     }
+ 
+     static InputStream openResource(String name) throws IOException {
++        // A payload and its runtime transformer must use the same mapping snapshot.
++        // Explicit document overrides still take precedence for development.
++        if (System.getProperty("crewx.mappings.document") == null
++                && !Boolean.getBoolean("crewx.mappings.remote")) {
++            InputStream bundled = MappingRepository.class.getResourceAsStream(name);
++            if (bundled != null) return bundled;
++        }
+         JsonObject profiles = root().getAsJsonObject("profiles");
+         if (profiles != null) {
+             for (Map.Entry<String, JsonElement> profile : profiles.entrySet()) {
+@@ -55,7 +62,9 @@ final class MappingRepository {
+                 current = document;
+                 if (current == null) {
+                     current = loadConfiguredDocument();
+-                    if (current == null) current = loadRemote();
++                    if (current == null && Boolean.getBoolean("crewx.mappings.remote")) {
++                        current = loadRemote();
++                    }
+                     if (current == null) current = loadBundled();
+                     if (current == null) {
+                         current = new JsonObject();
+diff --git a/src/main/java/crewx/module/modules/render/GuiModule.java b/src/main/java/crewx/module/modules/render/GuiModule.java
+index 744bda8..201d750 100644
+--- a/src/main/java/crewx/module/modules/render/GuiModule.java
++++ b/src/main/java/crewx/module/modules/render/GuiModule.java
+@@ -58,6 +58,7 @@ public class GuiModule extends Module {
+     public void onEnabled() {
+         setEnabled(false);
+         this.openNextTick = true;
++        crewx.inject.CrewXBootstrap.log("ClickGui opening queued; bind=" + getKey());
+     }
+ 
+     @EventTarget
+@@ -69,11 +70,17 @@ public class GuiModule extends Module {
+     }
+ 
+     private void openGui() {
++        crewx.inject.CrewXBootstrap.log("ClickGui opening; style="
++                + (isModern() ? "Modern" : "Legacy"));
+         if (isModern()) {
+             try {
+                 CrewXClickGuiBridge.open();
++                crewx.inject.CrewXBootstrap.log("ClickGui screen after open: "
++                        + (mc.currentScreen == null ? "<none>" : mc.currentScreen.getClass().getName()));
+                 return;
+             } catch (Throwable t) {
++                crewx.inject.CrewXBootstrap.log("Modern ClickGui FAILED: "
++                        + crewx.inject.CrewXBootstrap.describeFailure(t));
+                 t.printStackTrace();
+             }
+         }
+@@ -83,6 +90,8 @@ public class GuiModule extends Module {
+             }
+             mc.displayGuiScreen(this.legacyGui);
+         } catch (Throwable t) {
++            crewx.inject.CrewXBootstrap.log("Legacy ClickGui FAILED: "
++                    + crewx.inject.CrewXBootstrap.describeFailure(t));
+             t.printStackTrace();
+         }
+     }
+diff --git a/tools/GenerateOrnitheSrg.java b/tools/GenerateOrnitheSrg.java
+index 65b61f1..193f07b 100644
+--- a/tools/GenerateOrnitheSrg.java
++++ b/tools/GenerateOrnitheSrg.java
+@@ -4,6 +4,8 @@ import java.nio.file.Paths;
+ import java.util.HashMap;
+ import java.util.List;
+ import java.util.Map;
++import java.util.HashSet;
++import java.util.Set;
+ 
+ /** Composes MCP's official mappings with Ornithe Calamus intermediary gen2. */
+ public final class GenerateOrnitheSrg {
+@@ -46,9 +48,28 @@ public final class GenerateOrnitheSrg {
+                 || !"m_20213497".equals(methods.get("ave/A ()Lave;"))) {
+             throw new IllegalArgumentException("Ornithe 1.8.9 sentinels changed");
+         }
++        List<String> joined = Files.readAllLines(Paths.get(args[0]), StandardCharsets.UTF_8);
++        // Calamus stores an override on its interface/base class, while MCP repeats
++        // that SRG member on implementations. Recover only unambiguous SRG aliases;
++        // matching bare obfuscated names (a/b/...) would mix unrelated methods.
++        Map<String, String> methodAliases = new HashMap<>();
++        Map<String, String> fieldAliases = new HashMap<>();
++        Set<String> ambiguousMethods = new HashSet<>();
++        Set<String> ambiguousFields = new HashSet<>();
++        for (String line : joined) {
++            String[] p = line.trim().split(" +");
++            if (p.length == 5 && "MD:".equals(p[0])) {
++                String mapped = methods.get(p[1] + ' ' + p[2]);
++                if (mapped != null) alias(methodAliases, ambiguousMethods,
++                        simple(p[3]) + ' ' + p[4], mapped);
++            } else if (p.length == 3 && "FD:".equals(p[0])) {
++                String mapped = fields.get(p[1]);
++                if (mapped != null) alias(fieldAliases, ambiguousFields, simple(p[2]), mapped);
++            }
++        }
+         StringBuilder out = new StringBuilder();
+         int classCount = 0, fieldCount = 0, methodCount = 0, missing = 0;
+-        for (String line : Files.readAllLines(Paths.get(args[0]), StandardCharsets.UTF_8)) {
++        for (String line : joined) {
+             String[] p = line.trim().split(" +");
+             if (p.length == 3 && "CL:".equals(p[0])) {
+                 String mapped = classes.get(p[1]);
+@@ -62,6 +83,7 @@ public final class GenerateOrnitheSrg {
+                 String owner = official.substring(0, slash);
+                 String mappedOwner = classes.get(owner);
+                 String mappedField = fields.get(official);
++                if (mappedField == null) mappedField = fieldAliases.get(simple(p[2]));
+                 if (mappedOwner == null || mappedField == null) { missing++; continue; }
+                 out.append("FD: ").append(mappedOwner).append('/').append(mappedField)
+                         .append(' ').append(p[2]).append('\n');
+@@ -73,6 +95,9 @@ public final class GenerateOrnitheSrg {
+                 String owner = official.substring(0, slash);
+                 String mappedOwner = classes.get(owner);
+                 String mappedMethod = methods.get(official + ' ' + p[2]);
++                if (mappedMethod == null) {
++                    mappedMethod = methodAliases.get(simple(p[3]) + ' ' + p[4]);
++                }
+                 // Calamus records IThreadListener's inherited method on the interface only.
+                 if (mappedMethod == null && "ave/a".equals(official)
+                         && "(Ljava/lang/Runnable;)Lcom/google/common/util/concurrent/ListenableFuture;".equals(p[2])) {
+@@ -95,4 +120,18 @@ public final class GenerateOrnitheSrg {
+         System.out.println("Ornithe mapping: " + classCount + " classes, " + fieldCount
+                 + " fields, " + methodCount + " methods, " + missing + " missing");
+     }
++
++    private static String simple(String name) {
++        return name.substring(name.lastIndexOf('/') + 1);
++    }
++
++    private static void alias(Map<String, String> values, Set<String> ambiguous,
++            String key, String value) {
++        if (ambiguous.contains(key)) return;
++        String previous = values.putIfAbsent(key, value);
++        if (previous != null && !previous.equals(value)) {
++            values.remove(key);
++            ambiguous.add(key);
++        }
++    }
+ }
+diff --git a/tools/RemapCrewToNotch.java b/tools/RemapCrewToNotch.java
+index 98f2ebc..456d5c1 100644
+--- a/tools/RemapCrewToNotch.java
++++ b/tools/RemapCrewToNotch.java
+@@ -310,6 +310,11 @@ public final class RemapCrewToNotch {
+                     try (InputStream stream = input.getInputStream(entry)) {
+                         data = readAll(stream);
+                     }
++                    if (entry.getName().equals("crewx/inject/ornithe-joined.srg")
++                            && "net/minecraft/client/Minecraft".equals(
++                                    mapping.classes.get("net/minecraft/client/Minecraft"))) {
++                        data = Files.readAllBytes(Paths.get(args[2]));
++                    }
+                     if ((entry.getName().startsWith("crewx/")
+                             || entry.getName().startsWith("net/montoyo/mcef/")
+                             || (args.length > 5 && entry.getName().equals("org/cef/browser/CefRenderer.class")))
