@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="440" viewBox="0 0 1400 440" role="img" aria-labelledby="title desc">
+<title id="title">OneLauncher buff</title><desc id="desc">Fork independente com perfis offline, skins e capas locais. Windows x64, Minecraft 1.8.9 Ornithe.</desc>
+<defs><linearGradient id="bg" x2="1" y2="1"><stop stop-color="#111424"/><stop offset="1" stop-color="#1b1732"/></linearGradient><linearGradient id="accent"><stop stop-color="#b5a2ff"/><stop offset="1" stop-color="#88e4ce"/></linearGradient><pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M40 0H0V40" fill="none" stroke="#c6bcff" stroke-opacity=".055"/></pattern></defs>
+<rect width="1400" height="440" rx="24" fill="url(#bg)"/><rect width="1400" height="440" rx="24" fill="url(#grid)"/>
+<circle cx="1250" cy="120" r="225" fill="#8c70e5" opacity=".06"/><circle cx="1210" cy="330" r="200" fill="#88e4ce" opacity=".04"/>
+<rect x="64" y="63" width="5" height="29" rx="2" fill="#88e4ce"/>
+<text x="85" y="84" font-family="Arial, sans-serif" font-size="17" letter-spacing="4" fill="#bfb4ec">UM FORK POR LOVSKME</text>
+<text x="61" y="192" font-family="Arial, sans-serif" font-size="78" font-weight="700" letter-spacing="-3" fill="#f5f2ff">OneLauncher <tspan fill="url(#accent)">buff</tspan></text>
+<text x="65" y="246" font-family="Arial, sans-serif" font-size="27" fill="#c6c0d9">Seu perfil. Sua skin. Seu jeito de jogar.</text>
+<rect x="65" y="298" width="164" height="37" rx="18" fill="#2a2542"/><text x="147" y="322" text-anchor="middle" font-family="Arial, sans-serif" font-size="15" fill="#d8cef9">PERFIS OFFLINE</text>
+<rect x="241" y="298" width="170" height="37" rx="18" fill="#2a2542"/><text x="326" y="322" text-anchor="middle" font-family="Arial, sans-serif" font-size="15" fill="#d8cef9">SKINS &amp; CAPAS</text>
+<rect x="423" y="298" width="155" height="37" rx="18" fill="#203834"/><text x="500" y="322" text-anchor="middle" font-family="Arial, sans-serif" font-size="15" fill="#a3ead8">OFFLINE FIX3</text>
+<text x="65" y="393" font-family="Arial, sans-serif" font-size="15" fill="#9189aa">WINDOWS x64  /  MINECRAFT 1.8.9 ORNITHE  /  BASE POLYFROST</text>
+<g transform="translate(1080 114)"><path d="M0 52 91 0l91 52v105l-91 53L0 157Z" fill="#1c2334" stroke="#a598ed" stroke-width="2"/><path d="m0 52 91 53 91-53M91 105v105" fill="none" stroke="#a598ed" stroke-width="2"/><path d="m23 53 68-39 68 39-68 39Z" fill="#9880df" opacity=".35"/><path d="m107 114 55-32v62l-55 32Z" fill="#88e4ce" opacity=".28"/><path d="m21 84 54 31v62l-54-31Z" fill="#8a71cf" opacity=".23"/></g>
+</svg>

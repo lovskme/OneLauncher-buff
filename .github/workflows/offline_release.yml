@@ -1,0 +1,92 @@
+name: Publish Offline Fix3 download
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/offline_release.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-offline-fix3
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SOURCE_SHA: c7d2cf1f664dad5c8a7aa2ee3f8b7cd077e0d5df
+      SOURCE_RUN: '45901138960'
+      SOURCE_ARTIFACT: '15156903530'
+      RELEASE_TAG: 2.12.1-offline-fix3
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Verify installer provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN" > "$RUNNER_TEMP/source-run.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$SOURCE_ARTIFACT" > "$RUNNER_TEMP/source-artifact.json"
+          python3 - <<'PY'
+          import json, os, pathlib
+          root = pathlib.Path(os.environ['RUNNER_TEMP'])
+          run = json.loads((root / 'source-run.json').read_text())
+          artifact = json.loads((root / 'source-artifact.json').read_text())
+          assert run['conclusion'] == 'success'
+          assert run['head_sha'] == os.environ['SOURCE_SHA']
+          assert run['head_branch'] == 'offline-profiles'
+          assert run['path'] == '.github/workflows/offline_windows.yml'
+          assert artifact['name'] == 'oneclient-offline-windows-x64-installer'
+          assert not artifact['expired']
+          assert artifact['workflow_run']['id'] == int(os.environ['SOURCE_RUN'])
+          assert artifact['workflow_run']['head_sha'] == os.environ['SOURCE_SHA']
+          assert artifact['digest'] == 'sha256:10272727d5319e7e6b56824384b6dc3f9379d6ceeb90cdf27a585736dc441e2b'
+          PY
+      - name: Download original build archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$SOURCE_ARTIFACT/zip" > "$RUNNER_TEMP/installer.zip"
+          echo "10272727d5319e7e6b56824384b6dc3f9379d6ceeb90cdf27a585736dc441e2b  $RUNNER_TEMP/installer.zip" | sha256sum --check
+      - name: Extract installer and create checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os, pathlib, zipfile
+          archive = pathlib.Path(os.environ['RUNNER_TEMP']) / 'installer.zip'
+          with zipfile.ZipFile(archive) as source:
+              entries = [x for x in source.infolist() if not x.is_dir()]
+              assert len(entries) == 1, 'Expected exactly one installer'
+              entry = entries[0]
+              assert entry.filename.endswith('-setup.exe')
+              assert entry.file_size == 177463530, 'Unexpected Fix3 installer size'
+              output = pathlib.Path('release-output')
+              output.mkdir()
+              (output / 'OneClient-Offline-Fix3-Windows-x64-setup.exe').write_bytes(source.read(entry))
+          PY
+          cd release-output
+          sha256sum OneClient-Offline-Fix3-Windows-x64-setup.exe > SHA256SUMS.txt
+      - name: Publish verified installer
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::Release already exists; refusing to replace published files."
+            exit 1
+          fi
+          gh release create "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$SOURCE_SHA" \
+            --title "OneClient 2.12.1 · Offline Fix3" \
+            --notes-file docs/RELEASE_FIX3.md \
+            --prerelease \
+            release-output/OneClient-Offline-Fix3-Windows-x64-setup.exe \
+            release-output/SHA256SUMS.txt
